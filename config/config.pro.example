@@ -1,0 +1,4 @@
+! Review before adding these lines to the active Creo config.pro.
+protkdat <INSTALL_ROOT>\creotk.dat
+open_protk_unsigned_apps always
+max_undo 5

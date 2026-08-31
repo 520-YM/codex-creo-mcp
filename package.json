@@ -1,0 +1,13 @@
+{
+  "name": "codex-creo-mcp",
+  "version": "0.9.0",
+  "private": true,
+  "description": "Codex MCP bridge for Creo Parametric through Pro/TOOLKIT",
+  "scripts": {
+    "start": "node mcp/server.cjs",
+    "check": "node --check mcp/server.cjs && node tests/working_directory_policy_test.cjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

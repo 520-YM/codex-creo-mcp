@@ -1,0 +1,43 @@
+# Build output
+dist/
+build/
+*.exe
+*.dll
+*.obj
+*.lib
+*.exp
+*.pdb
+
+# Creo models and generated files
+*.prt
+*.prt.*
+*.asm
+*.asm.*
+*.drw
+*.drw.*
+*.step
+*.stp
+trail.txt*
+traceback.log
+
+# Local configuration and runtime data
+.env
+config.local.*
+output/
+runtime/
+*.bak
+
+# Diagnostics and media
+*.json
+!package.json
+!config/*.json
+*.png
+*.jpg
+*.mp4
+
+# Editors / OS
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

@@ -1,0 +1,20 @@
+[mcp_servers.creo_safe]
+command = '<NODE_EXE>'
+args = ['<INSTALL_ROOT>\server.cjs']
+cwd = '<INSTALL_ROOT>'
+startup_timeout_sec = 20
+tool_timeout_sec = 60
+enabled = true
+required = false
+default_tools_approval_mode = 'writes'
+
+[mcp_servers.creo_safe.env]
+CREO_BRIDGE_ROOT = '<INSTALL_ROOT>\bin'
+CREO_SAFE_OUTPUT_ROOT = '<INSTALL_ROOT>\output'
+CREO_PART_TEMPLATE = '<CREO_COMMON_FILES>\templates\mmns_part_solid_abs.prt'
+CREO_SHEETMETAL_TEMPLATE = '<CREO_COMMON_FILES>\templates\mmns_part_sheetmetal_abs.prt'
+CREO_ASSEMBLY_TEMPLATE = '<CREO_COMMON_FILES>\templates\mmns_asm_design_abs.asm'
+CREO_RUNTIME_OBJ = '<CREO_COMMON_FILES>\x86e_win64\obj'
+CREO_RUNTIME_LIB = '<CREO_COMMON_FILES>\x86e_win64\lib'
+PRO_COMM_MSG_EXE = '<CREO_COMMON_FILES>\x86e_win64\obj\pro_comm_msg.exe'
+CREO_PARAMETRIC_BAT = '<CREO_LOADPOINT>\Parametric\bin\parametric.bat'

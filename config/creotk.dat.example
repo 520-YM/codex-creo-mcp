@@ -1,0 +1,9 @@
+name CreoSafeResident
+startup dll
+revision 1
+exec_file <INSTALL_ROOT>\bin\creo_safe_resident.dll
+text_dir <INSTALL_ROOT>\text
+delay_start false
+allow_stop true
+fail_tol true
+end
