@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "application_width_mm": 120,
+  "do_not_substitute_grade": true,
+  "available_width_120": [
+    {"grade": "G4", "length_mm": 420, "width_mm": 120, "thickness_mm": 21, "material_code": "6.FIL420120112"},
+    {"grade": "G4", "length_mm": 500, "width_mm": 120, "thickness_mm": 21, "material_code": "6.FIL5001200107"},
+    {"grade": "G4", "length_mm": 600, "width_mm": 120, "thickness_mm": 21, "material_code": "6.FIL600120110"},
+    {"grade": "G4", "length_mm": 700, "width_mm": 120, "thickness_mm": 21, "material_code": "6.FIL700120111"}
+  ],
+  "missing": [{"grade": "F6", "width_mm": 120, "status": "原始表无正式型号"}],
+  "creo": {"part": "M26Z0181015-V01", "feature": "过滤棉孔"}
+}

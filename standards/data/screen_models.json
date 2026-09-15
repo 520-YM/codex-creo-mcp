@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "units": "kg",
+  "screens": {
+    "32inch": 4.8,
+    "43inch": 9.85,
+    "49inch": 12.25,
+    "55inch": 15.3,
+    "65inch": 20,
+    "75inch": 26,
+    "86inch": 35,
+    "98inch": 48
+  },
+  "assembly_rule": "只计算当前启用的屏模型，隐含屏不计入质量",
+  "datum_constraints": ["屏横平面", "屏竖平面", "屏体平面"]
+}

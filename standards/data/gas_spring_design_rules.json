@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "target_open_angle_deg": 50,
+  "open_angle_tolerance_deg": 5,
+  "target_closed_reserve_mm": 10,
+  "rear_bracket_initial_ratio": 0.75,
+  "bracket_dimensions_must_be_integer_mm": true,
+  "required_checks": ["型号", "前框支架位置", "后盖支架位置", "关闭压缩余量", "最大开门角度", "是否能撑起", "顶层重新生成"],
+  "screen_to_front_angle_difference_max_deg": 3,
+  "model_naming": "YQL{中心距}-{行程}-{UP径}-{DOWN径}-{推力N}",
+  "latest_65_trial": {
+    "door_mass_kg": 31.54,
+    "quantity": 2,
+    "model": "YQL600-255-22-10-210N",
+    "front_bracket_mm": 375,
+    "rear_bracket_mm": 800,
+    "measured_open_angle_deg": 46.25,
+    "closed_reserve_verified": false,
+    "status": "trial_not_final"
+  }
+}

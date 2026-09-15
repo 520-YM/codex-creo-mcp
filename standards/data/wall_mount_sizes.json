@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "units": "mm",
+  "products": {
+    "43": {"outer": [1245, 815], "glass_outer": [991, 579], "glass_inner": [941, 529], "vesa": [400, 400]},
+    "49": {"outer": [1304, 914], "glass_outer": [1124, 654], "glass_inner": [1074, 604], "vesa": [400, 400]},
+    "55": {"outer": [1440, 990], "glass_outer": [1259.6, 730.4], "glass_inner": [1209.6, 680.4], "vesa": [400, 400], "wall_sketch": [1200, 400]},
+    "65": {"outer": [1660, 1113], "glass_outer": [1478, 853], "glass_inner": [1428, 803], "vesa": [440, 500], "wall_sketch": [1400, 400]},
+    "75": {"outer": [1995, 1158], "glass_outer": [1740, 998], "glass_inner": [1650, 928], "vesa": [440, 600]},
+    "86": {"automation_enabled": false, "reason": "用户要求暂不处理"}
+  },
+  "vesa_order": ["横向", "纵向"],
+  "default_corner_radius": 0.5
+}

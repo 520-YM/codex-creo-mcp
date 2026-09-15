@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "connection": {"mode": "internal_dll", "workdir_source": "current_creo_working_directory", "fixed_project_path_forbidden": true, "dedicated_launcher": false},
+  "session_identity": ["pid", "process_start_time", "dedicated_pipe", "session_nonce"],
+  "prior_permission_required": ["config.pro", "WJT276插件", "截图或屏幕捕获", "鼠标键盘界面自动操作", "外部桥接", "专用Creo启动器", "不可逆删除", "86寸自动改型"],
+  "report_only_verified_results": true,
+  "must_regenerate_top_assembly": true,
+  "continue_safe_steps_after_nonfatal_failure": true
+}
