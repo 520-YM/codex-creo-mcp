@@ -31,6 +31,7 @@ runtime/
 *.json
 !package.json
 !config/*.json
+!standards/data/*.json
 *.png
 *.jpg
 *.mp4

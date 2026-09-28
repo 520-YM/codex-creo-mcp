@@ -5,6 +5,21 @@ const os = require('os');
 const path = require('path');
 const readline = require('readline');
 const { spawn, spawnSync } = require('child_process');
+const {
+  createSessionBinding,
+  createSpawnedSessionBinding,
+  publicSessionIdentity,
+  selectTargetSession,
+  validateResidentPing,
+} = require('./session-binding.cjs');
+const {
+  latestModelFamilies,
+  chooseTopAssembly,
+  chooseSkeleton,
+  readSizeRules,
+  readModelMap,
+  buildConversionStages,
+} = require('./wall-mount-orchestrator.cjs');
 
 const bridgeRoot = path.resolve(
   process.env.CREO_BRIDGE_ROOT ||
@@ -14,6 +29,9 @@ const safeOutputRoot = path.resolve(
   process.env.CREO_SAFE_OUTPUT_ROOT ||
   path.join(__dirname, 'output')
 );
+const ruleRoot = fs.existsSync(path.join(__dirname, 'standards'))
+  ? __dirname
+  : path.resolve(__dirname, '..');
 const creoPartTemplate = path.resolve(
   process.env.CREO_PART_TEMPLATE ||
   path.join(__dirname, 'templates', 'mmns_part_solid_abs.prt')
@@ -48,7 +66,12 @@ const nmsQueryExe = path.resolve(
   path.join(creoRuntimeObj, '..', 'nms', 'nmsq.exe'));
 const persistentFlatWallBridge = path.join(
   bridgeRoot, 'creo_sheetmetal_flat_wall_persistent_bridge.exe');
-const persistentFlatWallPipe = '\\\\.\\pipe\\creo_safe_flat_wall_v1';
+const legacyResidentPipe = '\\\\.\\pipe\\creo_safe_flat_wall_v1';
+const internalResidentDll = path.join(
+  bridgeRoot, 'creo_safe_resident_internal_v14.dll');
+const internalResidentLoader = path.join(
+  bridgeRoot, 'creo_internal_resident_loader_v14.exe');
+let activePersistentBinding = null;
 const creoHoleTableRoot = path.resolve(
   process.env.CREO_HOLE_TABLE_ROOT ||
   path.join(creoRuntimeObj, '..', '..', 'text', 'hole')
@@ -128,7 +151,7 @@ const toolDefinitions = [
   },
   {
     name: 'creo_start_resident_and_get_basic_model',
-    description: 'Creo 每次新会话的首次命令应先调用：启动或复用与当前 Creo 会话绑定的常驻桥接，并快速只读获取工作目录、当前模型名称、类型和外形尺寸；不遍历特征、尺寸、参数或装配组件。关闭该次 Creo 后桥接会自动退出。',
+    description: 'Creo 每次新会话的首次命令应先调用：绑定当前 Creo PID、启动时间和专属管道，读取当前工作目录、当前模型和外形尺寸，并尝试识别顶层装配、骨架、骨架外尺寸及关键特征摘要。全过程只读，不保存模型；关闭该次 Creo 后桥接自动退出。',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: {
       title: 'Creo 首次快速握手',
@@ -519,13 +542,13 @@ const toolDefinitions = [
   },
   {
     name: 'creo_get_mass_properties',
-    description: 'Read computed mass properties for the current Creo part or a part copy in the safe output directory. Uses unit density for calculation only and does not modify the model.',
+    description: 'Read computed mass properties for the current Creo part or assembly, or a part/assembly file directly inside the current Creo working directory. Uses assigned Creo materials and densities and does not modify or save the model.',
     inputSchema: {
       type: 'object',
       properties: {
         model_file: {
           type: 'string',
-          description: 'Optional part file name in the safe output directory. Omit to read the current model.',
+          description: 'Optional .prt/.asm file name directly inside the current Creo working directory. Omit to read the current model.',
         },
       },
       additionalProperties: false,
@@ -1977,6 +2000,10 @@ const toolDefinitions = [
           type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 31,
           description: 'Exact owning feature name.',
         },
+        top_assembly: {
+          type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 31,
+          description: 'Optional loaded top assembly to regenerate, save, and restore as active.',
+        },
         modifications: {
           type: 'array', minItems: 1, maxItems: 8,
           items: {
@@ -1987,11 +2014,11 @@ const toolDefinitions = [
                 minLength: 1, maxLength: 31,
               },
               expected_value: {
-                type: 'number', exclusiveMinimum: 0, maximum: 1000000,
+                type: 'number', minimum: 0, maximum: 1000000,
                 description: 'Required current value in Creo model units.',
               },
               new_value: {
-                type: 'number', exclusiveMinimum: 0, maximum: 1000000,
+                type: 'number', minimum: 0, maximum: 1000000,
                 description: 'New value in Creo model units.',
               },
             },
@@ -2005,6 +2032,72 @@ const toolDefinitions = [
     },
     annotations: {
       title: 'Modify Creo feature dimensions',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: 'creo_rename_current_project_part',
+    description: 'Rename the current active Creo part in the current Creo working directory. The active part name must exactly match expected_name, and the target model/file must not already exist. Regenerates, saves, and reads the new name back.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        expected_name: { type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 31 },
+        target_name: { type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 31 },
+      },
+      required: ['expected_name', 'target_name'],
+      additionalProperties: false,
+    },
+    annotations: {
+      title: 'Rename current Creo part', readOnlyHint: false,
+      destructiveHint: true, idempotentHint: false, openWorldHint: false,
+    },
+  },
+  {
+    name: 'creo_create_project_gas_spring_variant',
+    description: 'In the current Creo working directory, convert one loaded YQL gas-spring assembly to a new named variant in one guarded operation: rename the assembly and its unique YQLDOWN/YQLUP components, change both stroke extrusions, change the YQLUP compensation extrusion, change the YQLUP slider translation maximum, regenerate, save, read back, and keep the renamed top assembly active. The source assembly must be current and all expected old values must match.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        expected_assembly: {
+          type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 31,
+        },
+        target_assembly: {
+          type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 31,
+        },
+        expected_down_part: {
+          type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 31,
+        },
+        target_down_part: {
+          type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 31,
+        },
+        expected_up_part: {
+          type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 31,
+        },
+        target_up_part: {
+          type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 31,
+        },
+        expected_stroke: { type: 'number', minimum: 0, maximum: 1000000 },
+        new_stroke: { type: 'number', minimum: 0, maximum: 1000000 },
+        expected_up_compensation: { type: 'number', minimum: 0, maximum: 1000000 },
+        new_up_compensation: { type: 'number', minimum: 0, maximum: 1000000 },
+        expected_translation_max: { type: 'number', minimum: 0, maximum: 1000000 },
+        new_translation_max: { type: 'number', minimum: 0, maximum: 1000000 },
+      },
+      required: [
+        'expected_assembly', 'target_assembly',
+        'expected_down_part', 'target_down_part',
+        'expected_up_part', 'target_up_part',
+        'expected_stroke', 'new_stroke',
+        'expected_up_compensation', 'new_up_compensation',
+        'expected_translation_max', 'new_translation_max',
+      ],
+      additionalProperties: false,
+    },
+    annotations: {
+      title: 'Create Creo YQL gas-spring variant',
       readOnlyHint: false,
       destructiveHint: true,
       idempotentHint: false,
@@ -2125,6 +2218,91 @@ const toolDefinitions = [
     },
     annotations: {
       title: 'Create general Creo sketch',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: 'creo_open_top_assembly',
+    description: '从当前 Creo 工作目录自动识别并打开顶层装配。优先选择名称含五个连续 0 的装配；没有时识别其他非气弹簧装配。随后识别对应骨架并读取基础信息。不会接收或更改工作目录。',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: {
+      title: '打开总装配并读取骨架',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: 'creo_read_wall_mount_state',
+    description: '一次读取当前工作目录、顶层装配、骨架、装配组件、当前启用屏模型、质量及可获取的关键特征信息。只报告 API 实际读回结果，不修改或保存模型。',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: {
+      title: '读取壁挂完整状态',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: 'creo_convert_wall_mount_size',
+    description: '按照公司规则库生成横屏内贴玻璃户外壁挂的 14 步改型任务。先完成真实会话、顶层装配和骨架预检；只有具备经过验证的模型特征映射时才允许写入。缺少映射的步骤明确标记为未执行，绝不虚报成功。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target_size: { type: 'string', enum: ['43', '49', '55', '65', '75'] },
+        execute_verified_steps: { type: 'boolean', default: false },
+      },
+      required: ['target_size'],
+      additionalProperties: false,
+    },
+    annotations: {
+      title: '按14步流程改型壁挂',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: 'creo_validate_wall_mount_conversion',
+    description: '只读验收当前横屏内贴玻璃户外壁挂：核对工作目录、顶层装配、骨架外尺寸、活动屏、14步映射覆盖率，以及风扇、过滤棉和两组气弹簧尚未完成的机械验证。任何无法由API证实的项目都明确列为阻塞，不修改或保存模型。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target_size: { type: 'string', enum: ['43', '49', '55', '65', '75'] },
+      },
+      required: ['target_size'],
+      additionalProperties: false,
+    },
+    annotations: {
+      title: '验收壁挂改型结果',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: 'creo_regenerate_validate_save_top_assembly',
+    description: '校验当前活动模型与指定顶层装配名称完全一致，最多执行三次强制重新生成，读取全部顶层组件特征状态；只有重新生成和状态读取均成功时，才可按明确参数保存。默认不保存。不会更改工作目录、配置文件或插件。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        expected_assembly: {
+          type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 31,
+        },
+        save_after_validation: { type: 'boolean', default: false },
+      },
+      required: ['expected_assembly'],
+      additionalProperties: false,
+    },
+    annotations: {
+      title: '重新生成验收并保存顶层装配',
       readOnlyHint: false,
       destructiveHint: true,
       idempotentHint: false,
@@ -2438,50 +2616,45 @@ function withProjectModelCleanup(projectDirectory, result, keepFiles) {
 }
 
 function runBridge(executableName, args) {
-  const executable = path.join(bridgeRoot, executableName);
-  if (!fs.existsSync(executable)) {
-    throw new Error(`缺少 Creo 桥接程序：${executable}`);
-  }
-
   const runtimeDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'creo-mcp-'));
   const resultPath = path.join(runtimeDirectory, 'result.json');
-  const env = {
-    ...process.env,
-    PRO_COMM_MSG_EXE: proCommMsgExe,
-    PATH: `${creoRuntimeObj};${creoRuntimeLib};${process.env.PATH || ''}`,
-  };
+  const commandPath = path.join(runtimeDirectory, 'command.txt');
 
   try {
-    const completed = spawnSync(
-      executable,
-      [resultPath, ...args],
-      {
-        encoding: 'utf8',
-        env,
-        windowsHide: true,
-        timeout: 60000,
-        maxBuffer: 4 * 1024 * 1024,
-      }
-    );
+    const commandArguments = [executableName, resultPath, ...args]
+      .map((value) => String(value));
+    if (commandArguments.some((value) => /[\r\n]/.test(value))) {
+      throw new Error('Creo 内部常驻命令参数不能包含换行符。');
+    }
+    fs.writeFileSync(commandPath, commandArguments.join('\n'), 'utf8');
+    const bridge = ensureInternalCreoBridge();
+    const response = requestPersistentFlatWall(
+      bridge.binding, `EXECFILE|${commandPath}`);
 
     let data = null;
     if (fs.existsSync(resultPath)) {
       data = JSON.parse(fs.readFileSync(resultPath, 'utf8').replace(/^\uFEFF/, ''));
     }
-    if (completed.error) {
-      throw completed.error;
-    }
-    if (completed.status !== 0) {
+    if (!response.ok || response.exit_code !== 0) {
       const detail = data || {
         ok: false,
-        exit_code: completed.status,
-        stderr: (completed.stderr || '').trim(),
+        exit_code: response.exit_code,
+        stage: response.stage || 'internal_resident_command',
       };
-      const error = new Error(`Creo 桥接操作未完成（退出码 ${completed.status}）。`);
+      const error = new Error(
+        `Creo 内部常驻桥接操作未完成（退出码 ${response.exit_code}）。`);
       error.detail = detail;
       throw error;
     }
-    return data || { ok: true };
+    return {
+      ...(data || { ok: true }),
+      internal_resident: true,
+      connection_mode: 'in_process_dll',
+      session_bound: true,
+      target_creo_process_id: bridge.binding.target_process_id,
+      worker_process_id: bridge.binding.target_process_id,
+      connection_reused: !bridge.resident_started,
+    };
   } finally {
     fs.rmSync(runtimeDirectory, { recursive: true, force: true });
   }
@@ -2491,6 +2664,7 @@ function runResidentBackframeResize(newLength, newWidth) {
   if (!fs.existsSync(residentBackframeResizeScript)) {
     throw new Error(`缺少 Creo 常驻尺寸脚本：${residentBackframeResizeScript}`);
   }
+  const bridge = ensureInternalCreoBridge();
   const completed = spawnSync(
     'powershell.exe',
     [
@@ -2505,6 +2679,10 @@ function runResidentBackframeResize(newLength, newWidth) {
       windowsHide: true,
       timeout: 60000,
       maxBuffer: 4 * 1024 * 1024,
+      env: {
+        ...process.env,
+        CREO_INTERNAL_PIPE_NAME: bridge.binding.pipe_name,
+      },
     }
   );
   const output = (completed.stdout || '').trim().replace(/^\uFEFF/, '');
@@ -2523,13 +2701,19 @@ function runResidentBackframeResize(newLength, newWidth) {
     };
     throw error;
   }
-  return data;
+  return {
+    ...data,
+    internal_resident: true,
+    connection_mode: 'in_process_dll',
+    session_identity: bridge.identity,
+  };
 }
 
 function runResidentComponentSwitch(assembly, suppressComponent, resumeComponent) {
   if (!fs.existsSync(residentComponentSwitchScript)) {
     throw new Error(`缺少 Creo 常驻组件切换脚本：${residentComponentSwitchScript}`);
   }
+  const bridge = ensureInternalCreoBridge();
   const completed = spawnSync(
     'powershell.exe',
     [
@@ -2545,6 +2729,10 @@ function runResidentComponentSwitch(assembly, suppressComponent, resumeComponent
       windowsHide: true,
       timeout: 60000,
       maxBuffer: 4 * 1024 * 1024,
+      env: {
+        ...process.env,
+        CREO_INTERNAL_PIPE_NAME: bridge.binding.pipe_name,
+      },
     }
   );
   const output = (completed.stdout || '').trim().replace(/^\uFEFF/, '');
@@ -2563,13 +2751,19 @@ function runResidentComponentSwitch(assembly, suppressComponent, resumeComponent
     };
     throw error;
   }
-  return data;
+  return {
+    ...data,
+    internal_resident: true,
+    connection_mode: 'in_process_dll',
+    session_identity: bridge.identity,
+  };
 }
 
 function runResidentHingePattern(newCount, newSpacing) {
   if (!fs.existsSync(residentHingePatternScript)) {
     throw new Error(`缺少 Creo 常驻铰链阵列脚本：${residentHingePatternScript}`);
   }
+  const bridge = ensureInternalCreoBridge();
   const completed = spawnSync(
     'powershell.exe',
     [
@@ -2584,6 +2778,10 @@ function runResidentHingePattern(newCount, newSpacing) {
       windowsHide: true,
       timeout: 60000,
       maxBuffer: 4 * 1024 * 1024,
+      env: {
+        ...process.env,
+        CREO_INTERNAL_PIPE_NAME: bridge.binding.pipe_name,
+      },
     }
   );
   const output = (completed.stdout || '').trim().replace(/^\uFEFF/, '');
@@ -2602,7 +2800,12 @@ function runResidentHingePattern(newCount, newSpacing) {
     };
     throw error;
   }
-  return data;
+  return {
+    ...data,
+    internal_resident: true,
+    connection_mode: 'in_process_dll',
+    session_identity: bridge.identity,
+  };
 }
 
 function sleepSync(milliseconds) {
@@ -2610,11 +2813,18 @@ function sleepSync(milliseconds) {
     new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
-function requestPersistentFlatWall(message) {
+function requestPersistentFlatWall(binding, message) {
+  if (!binding || typeof binding.pipe_name !== 'string' ||
+      (!binding.legacy_dll && typeof binding.session_nonce !== 'string')) {
+    throw new Error('A verified Creo resident session binding is required.');
+  }
   let descriptor;
   try {
-    descriptor = fs.openSync(persistentFlatWallPipe, 'r+');
-    fs.writeSync(descriptor, Buffer.from(`${message}\n`, 'utf8'));
+    descriptor = fs.openSync(binding.pipe_name, 'r+');
+    const request = binding.legacy_dll
+      ? `${message}\n`
+      : `AUTH|${binding.session_nonce}|${message}\n`;
+    fs.writeSync(descriptor, Buffer.from(request, 'utf8'));
     const response = Buffer.alloc(8192);
     const bytesRead = fs.readSync(descriptor, response, 0, response.length, null);
     if (bytesRead < 1) {
@@ -2723,14 +2933,102 @@ function discoverCreoSessions() {
   return records;
 }
 
-function ensurePersistentFlatWallBridge() {
+function loadSpawnedResidentBinding(targetSession) {
+  const registryPath = path.join(
+    os.tmpdir(), `codex-creo-resident-${targetSession.process_id}.json`);
+  if (!fs.existsSync(registryPath)) {
+    return null;
+  }
   try {
-    const ping = requestPersistentFlatWall('PING');
-    if (ping.ok && ping.persistent && ping.connected) {
-      return { ...ping, resident_started: false };
+    const record = JSON.parse(
+      fs.readFileSync(registryPath, 'utf8').replace(/^\uFEFF/, ''));
+    return createSpawnedSessionBinding(targetSession, {
+      ...record,
+      registry_path: registryPath,
+    });
+  } catch (_) {
+    return null;
+  }
+}
+
+function ensurePersistentFlatWallBridge() {
+  const sessions = discoverCreoSessions();
+  const targetSession = selectTargetSession(
+    sessions, activePersistentBinding, process.env.CREO_TARGET_PROCESS_ID);
+  const legacyBinding = {
+    protocol: 'creo-safe-resident-dll-v8',
+    legacy_dll: true,
+    target_process_id: Number(targetSession.process_id),
+    connect_id: targetSession.connect_id,
+    pipe_name: legacyResidentPipe,
+    selection_policy: 'legacy_in_process_resident_dll',
+  };
+  try {
+    const ping = requestPersistentFlatWall(legacyBinding, 'PING');
+    if (ping?.ok === true && ping?.persistent === true &&
+        ping?.connected === true && ping?.session_bound === true) {
+      activePersistentBinding = legacyBinding;
+      return {
+        binding: legacyBinding,
+        ping,
+        identity: {
+          protocol: legacyBinding.protocol,
+          target_creo_process_id: legacyBinding.target_process_id,
+          target_creo_start_time_100ns: null,
+          worker_process_id: null,
+          session_nonce: null,
+          session_fingerprint: null,
+          selection_policy: legacyBinding.selection_policy,
+          pipe_scope: 'legacy_single_user_pipe',
+        },
+        resident_started: false,
+        resident_startup: 'creo_in_process_dll',
+      };
     }
   } catch (_) {
-    // The worker is not running yet; start it below.
+    // The explicitly restored legacy DLL is not loaded in this Creo process.
+  }
+  const spawnedBinding = loadSpawnedResidentBinding(targetSession);
+  if (spawnedBinding) {
+    let lastSpawnedError;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      try {
+        const ping = requestPersistentFlatWall(spawnedBinding, 'PING');
+        validateResidentPing(ping, spawnedBinding);
+        activePersistentBinding = spawnedBinding;
+        return {
+          binding: spawnedBinding,
+          ping,
+          identity: publicSessionIdentity(spawnedBinding, ping),
+          resident_started: false,
+          resident_startup: 'creo_startup_spawn',
+        };
+      } catch (error) {
+        lastSpawnedError = error;
+        sleepSync(100);
+      }
+    }
+    throw new Error(
+      `Creo startup-spawn resident bridge was registered but its session pipe ` +
+      `was not ready: ${lastSpawnedError?.message || 'unknown error'}`);
+  }
+  const binding = createSessionBinding(targetSession);
+  try {
+    const ping = requestPersistentFlatWall(binding, 'PING');
+    validateResidentPing(ping, binding);
+    activePersistentBinding = binding;
+    return {
+      binding,
+      ping,
+      identity: publicSessionIdentity(binding, ping),
+      resident_started: false,
+    };
+  } catch (error) {
+    // A missing per-session pipe means this exact Creo session has no worker.
+    // An identity mismatch is fail-closed and must never reuse another worker.
+    if (error && /does not match|bound to Creo PID/.test(error.message || '')) {
+      throw error;
+    }
   }
   if (!fs.existsSync(persistentFlatWallBridge)) {
     throw new Error(
@@ -2748,16 +3046,6 @@ function ensurePersistentFlatWallBridge() {
   for (let launchAttempt = 1;
     launchAttempt <= maximumLaunchAttempts;
     launchAttempt += 1) {
-    const sessions = discoverCreoSessions();
-    if (sessions.length === 0) {
-      throw new Error(
-        'No live Creo Parametric session is registered with the PTC name server.');
-    }
-    // A normal desktop workflow has one live Creo process. If more than one is
-    // present, prefer the most recently assigned process id and bind the worker
-    // to its exact RPC connection id instead of allowing a random attachment.
-    sessions.sort((left, right) => right.process_id - left.process_id);
-    const targetSession = sessions[0];
     const startupStatusPath = path.join(
       os.tmpdir(),
       `creo-resident-start-${process.pid}-${Date.now()}-${launchAttempt}.json`);
@@ -2766,6 +3054,11 @@ function ensurePersistentFlatWallBridge() {
       CREO_CONNECT_ID: targetSession.connect_id,
       CREO_CONNECT_DISPLAY: targetSession.display,
       CREO_CONNECT_USER: targetSession.user || '',
+      CREO_TARGET_PROCESS_ID: String(binding.target_process_id),
+      CREO_RESIDENT_PIPE: binding.pipe_name,
+      CREO_RESIDENT_MUTEX: binding.mutex_name,
+      CREO_SESSION_NONCE: binding.session_nonce,
+      CREO_SESSION_FINGERPRINT: binding.session_fingerprint,
       CREO_BRIDGE_STARTUP_STATUS: startupStatusPath,
     };
     const launchedAt = Date.now();
@@ -2797,7 +3090,8 @@ function ensurePersistentFlatWallBridge() {
     for (let pollAttempt = 0; pollAttempt < 170; pollAttempt += 1) {
       sleepSync(100);
       try {
-        const ping = requestPersistentFlatWall('PING');
+        const ping = requestPersistentFlatWall(binding, 'PING');
+        validateResidentPing(ping, binding);
         if (ping.ok && ping.persistent && ping.connected) {
           diagnostic.ready_after_ms = Date.now() - launchedAt;
           try {
@@ -2805,8 +3099,11 @@ function ensurePersistentFlatWallBridge() {
           } catch (_) {
             // Diagnostic cleanup is best effort only.
           }
+          activePersistentBinding = binding;
           return {
-            ...ping,
+            binding,
+            ping,
+            identity: publicSessionIdentity(binding, ping),
             resident_started: true,
             launch_attempt: launchAttempt,
             launch_diagnostics: launchDiagnostics,
@@ -2870,6 +3167,287 @@ function ensurePersistentFlatWallBridge() {
     `${JSON.stringify(launchDiagnostics)}`);
 }
 
+function createInternalCreoBinding(targetSession, version = 'v14') {
+  const targetProcessId = Number(targetSession.process_id);
+  const protocol = `creo-safe-internal-${version}`;
+  return {
+    protocol,
+    legacy_dll: true,
+    target_process_id: targetProcessId,
+    connect_id: targetSession.connect_id,
+    display: targetSession.display || '',
+    user: targetSession.user || '',
+    pipe_name: `\\\\.\\pipe\\codex_creo_internal_${version}_${targetProcessId}`,
+    selection_policy:
+      targetSession.selection_policy || 'single_or_latest_registered_session',
+  };
+}
+
+function validateInternalCreoPing(ping, binding) {
+  if (!ping || ping.ok !== true || ping.persistent !== true ||
+      ping.connected !== true || ping.session_bound !== true ||
+      ping.transport !== 'in_process_dll' ||
+      ping.protocol !== binding.protocol) {
+    throw new Error('Creo 内部 DLL 没有返回健康握手。');
+  }
+  if (Number(ping.target_creo_process_id) !== binding.target_process_id ||
+      Number(ping.worker_process_id) !== binding.target_process_id) {
+    throw new Error(
+      `Creo 内部 DLL 绑定到进程 ${ping.target_creo_process_id}，` +
+      `当前目标进程是 ${binding.target_process_id}。`);
+  }
+  const startTime = ping.target_creo_start_time_100ns;
+  if (startTime !== undefined && startTime !== null &&
+      !/^\d+$/.test(String(startTime))) {
+    throw new Error('Creo 内部 DLL 返回了无效的进程启动时间。');
+  }
+  if (binding.target_creo_start_time_100ns !== undefined &&
+      binding.target_creo_start_time_100ns !== null &&
+      startTime !== undefined && startTime !== null &&
+      String(binding.target_creo_start_time_100ns) !== String(startTime)) {
+    throw new Error('Creo PID 相同，但进程启动时间已经改变。');
+  }
+  return ping;
+}
+
+function bindInternalCreoStartTime(binding, ping) {
+  if (ping.target_creo_start_time_100ns === undefined ||
+      ping.target_creo_start_time_100ns === null) {
+    return binding;
+  }
+  return {
+    ...binding,
+    target_creo_start_time_100ns:
+      String(ping.target_creo_start_time_100ns),
+  };
+}
+
+function internalCreoIdentity(binding, ping) {
+  return {
+    protocol: binding.protocol,
+    target_creo_process_id: binding.target_process_id,
+    target_creo_start_time_100ns:
+      ping.target_creo_start_time_100ns ??
+      binding.target_creo_start_time_100ns ?? null,
+    worker_process_id: Number(ping.worker_process_id),
+    selection_policy: binding.selection_policy,
+    pipe_scope: 'one_internal_pipe_per_creo_process',
+    connection_mode: 'in_process_dll',
+  };
+}
+
+function tryReuseActiveInternalCreoBridge() {
+  if (!activePersistentBinding ||
+      !['creo-safe-internal-v14', 'creo-safe-internal-v13', 'creo-safe-internal-v11']
+        .includes(activePersistentBinding.protocol)) {
+    return null;
+  }
+  try {
+    const ping = requestPersistentFlatWall(activePersistentBinding, 'PING');
+    validateInternalCreoPing(ping, activePersistentBinding);
+    const binding = bindInternalCreoStartTime(activePersistentBinding, ping);
+    activePersistentBinding = binding;
+    return {
+      binding,
+      ping,
+      identity: internalCreoIdentity(binding, ping),
+      resident_started: false,
+      resident_startup: 'fast_cached_in_process_dll',
+      session_check: 'pid_start_time_and_dedicated_pipe',
+    };
+  } catch (_) {
+    // The old Creo process or its exact-session pipe is gone. Never retry it.
+    activePersistentBinding = null;
+    return null;
+  }
+}
+
+function tryDiscoverLoadedInternalCreoBridge() {
+  const completed = spawnSync(
+    'powershell.exe',
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+      "@(Get-Process -Name xtop -ErrorAction SilentlyContinue | " +
+      "Select-Object Id,@{Name='StartTicks';Expression={$_.StartTime.ToUniversalTime().Ticks}}) | " +
+      'ConvertTo-Json -Compress'],
+    {
+      encoding: 'utf8', windowsHide: true, timeout: 3000,
+      maxBuffer: 1024 * 1024,
+    });
+  if (completed.error || completed.status !== 0) return null;
+  let processes;
+  try {
+    processes = JSON.parse(String(completed.stdout || '[]').replace(/^\uFEFF/, ''));
+  } catch (_) {
+    return null;
+  }
+  if (!Array.isArray(processes)) processes = processes ? [processes] : [];
+  const explicit = Number(process.env.CREO_TARGET_PROCESS_ID || 0);
+  processes = processes
+    .filter((item) => Number.isInteger(Number(item.Id)) && Number(item.Id) > 0)
+    .sort((a, b) => Number(b.StartTicks || 0) - Number(a.StartTicks || 0));
+  if (explicit > 0) {
+    processes = processes.filter((item) => Number(item.Id) === explicit);
+  }
+  for (const processInfo of processes) {
+    for (const version of ['v14', 'v13', 'v11']) {
+      const binding = createInternalCreoBinding({
+        process_id: Number(processInfo.Id),
+        connect_id: '', display: '', user: '',
+        selection_policy: explicit > 0
+          ? 'explicit_loaded_internal_pipe'
+          : 'latest_loaded_internal_pipe',
+      }, version);
+      try {
+        const ping = requestPersistentFlatWall(binding, 'PING');
+        validateInternalCreoPing(ping, binding);
+        const verifiedBinding = bindInternalCreoStartTime(binding, ping);
+        activePersistentBinding = verifiedBinding;
+        return {
+          binding: verifiedBinding,
+          ping,
+          identity: internalCreoIdentity(verifiedBinding, ping),
+          resident_started: false,
+          resident_startup: 'discovered_existing_in_process_dll',
+          session_check: 'running_pid_start_time_and_dedicated_pipe',
+        };
+      } catch (_) {
+        // Try the other supported pipe, then the next Creo process.
+      }
+    }
+  }
+  return null;
+}
+
+function ensureInternalCreoBridge() {
+  const cached = tryReuseActiveInternalCreoBridge();
+  if (cached) {
+    return cached;
+  }
+  const loaded = tryDiscoverLoadedInternalCreoBridge();
+  if (loaded) {
+    return loaded;
+  }
+  const sessions = discoverCreoSessions();
+  const targetSession = selectTargetSession(
+    sessions, activePersistentBinding, process.env.CREO_TARGET_PROCESS_ID);
+  let binding = createInternalCreoBinding(targetSession, 'v14');
+  for (const version of ['v14', 'v13', 'v11']) {
+    binding = createInternalCreoBinding(targetSession, version);
+    try {
+      const ping = requestPersistentFlatWall(binding, 'PING');
+      validateInternalCreoPing(ping, binding);
+      const verifiedBinding = bindInternalCreoStartTime(binding, ping);
+      activePersistentBinding = verifiedBinding;
+      return {
+        binding: verifiedBinding,
+        ping,
+        identity: internalCreoIdentity(verifiedBinding, ping),
+        resident_started: false,
+        resident_startup: 'reused_in_process_dll',
+        session_check: 'fresh_session_pid_start_time_and_dedicated_pipe',
+      };
+    } catch (_) {
+      // This Creo process has not loaded this supported DLL version.
+    }
+  }
+  binding = createInternalCreoBinding(targetSession, 'v14');
+
+  if (process.env.CREO_ALLOW_DYNAMIC_INTERNAL_LOAD !== '1') {
+    const error = new Error(
+      '当前 Creo 会话尚未加载内部 DLL；请按正常方式重启 Creo 后重试。');
+    error.detail = {
+      ok: false,
+      stage: 'internal_dll_not_loaded',
+      target_creo_process_id: binding.target_process_id,
+      dynamic_load_skipped: true,
+      retry_delay_ms: 0,
+    };
+    throw error;
+  }
+
+  if (!fs.existsSync(internalResidentDll)) {
+    throw new Error(`缺少 Creo 内部 DLL：${internalResidentDll}`);
+  }
+  if (!fs.existsSync(internalResidentLoader)) {
+    throw new Error(`缺少 Creo 内部 DLL 一次性载入器：${internalResidentLoader}`);
+  }
+
+  const runtimeDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'creo-internal-load-'));
+  const resultPath = path.join(runtimeDirectory, 'result.json');
+  let loadResult = null;
+  try {
+    const loaded = spawnSync(
+      internalResidentLoader,
+      [
+        resultPath,
+        targetSession.connect_id,
+        targetSession.display || '',
+        targetSession.user || '',
+        '',
+        internalResidentDll,
+        bridgeRoot,
+      ],
+      {
+        cwd: bridgeRoot,
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 15000,
+        maxBuffer: 2 * 1024 * 1024,
+        env: {
+          ...process.env,
+          PRO_COMM_MSG_EXE: proCommMsgExe,
+          PATH: `${creoRuntimeObj};${creoRuntimeLib};${process.env.PATH || ''}`,
+        },
+      }
+    );
+    if (fs.existsSync(resultPath)) {
+      try {
+        loadResult = JSON.parse(
+          fs.readFileSync(resultPath, 'utf8').replace(/^\uFEFF/, ''));
+      } catch (_) {
+        loadResult = { ok: false, stage: 'invalid_loader_result' };
+      }
+    }
+    if (loaded.error || loaded.status !== 0 || loadResult?.ok !== true) {
+      const error = new Error('Creo 内部 DLL 动态载入失败。');
+      error.detail = loadResult || {
+        ok: false,
+        stage: loaded.error?.code === 'ETIMEDOUT'
+          ? 'loader_timeout' : 'loader_exit',
+        exit_code: loaded.status,
+        stderr: String(loaded.stderr || '').trim(),
+      };
+      throw error;
+    }
+
+    let lastError = null;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try {
+        const ping = requestPersistentFlatWall(binding, 'PING');
+        validateInternalCreoPing(ping, binding);
+        const verifiedBinding = bindInternalCreoStartTime(binding, ping);
+        activePersistentBinding = verifiedBinding;
+        return {
+          binding: verifiedBinding,
+          ping,
+          identity: internalCreoIdentity(verifiedBinding, ping),
+          resident_started: true,
+          resident_startup: 'one_time_dynamic_dll_load',
+          loader_result: loadResult,
+        };
+      } catch (error) {
+        lastError = error;
+        sleepSync(100);
+      }
+    }
+    throw new Error(
+      `Creo 内部 DLL 已载入，但内部管道未就绪：${lastError?.message || 'timeout'}`);
+  } finally {
+    fs.rmSync(runtimeDirectory, { recursive: true, force: true });
+  }
+}
+
 function runPersistentDisplayModel(modelFile, expectedModel) {
   const runtimeDirectory = fs.mkdtempSync(
     path.join(os.tmpdir(), 'creo-mcp-display-'));
@@ -2877,10 +3455,11 @@ function runPersistentDisplayModel(modelFile, expectedModel) {
   const totalStarted = process.hrtime.bigint();
   try {
     const connectionStarted = process.hrtime.bigint();
-    const bridge = ensurePersistentFlatWallBridge();
+    const bridge = ensureInternalCreoBridge();
     const connectionFinished = process.hrtime.bigint();
     const displayStarted = process.hrtime.bigint();
     const response = requestPersistentFlatWall(
+      bridge.binding,
       `DISPLAY|${resultPath}|${modelFile}|${expectedModel}`);
     const displayFinished = process.hrtime.bigint();
     let data = null;
@@ -2902,6 +3481,7 @@ function runPersistentDisplayModel(modelFile, expectedModel) {
       resident_started: Boolean(bridge.resident_started),
       connection_reused: !bridge.resident_started,
       automatic_disconnect: 'when_current_creo_session_exits',
+      session_identity: bridge.identity,
       timings_ms: {
         bridge_start_or_reuse: Number(milliseconds(
           connectionFinished, connectionStarted).toFixed(1)),
@@ -2923,10 +3503,11 @@ function runPersistentBasicModelRead() {
   const totalStarted = process.hrtime.bigint();
   try {
     const connectionStarted = process.hrtime.bigint();
-    const bridge = ensurePersistentFlatWallBridge();
+    const bridge = ensureInternalCreoBridge();
     const connectionFinished = process.hrtime.bigint();
     const readStarted = process.hrtime.bigint();
-    const response = requestPersistentFlatWall(`BASIC|${resultPath}`);
+    const response = requestPersistentFlatWall(
+      bridge.binding, `BASIC|${resultPath}`);
     const readFinished = process.hrtime.bigint();
     let data = null;
     if (fs.existsSync(resultPath)) {
@@ -2947,6 +3528,7 @@ function runPersistentBasicModelRead() {
       resident_started: Boolean(bridge.resident_started),
       connection_reused: !bridge.resident_started,
       automatic_disconnect: 'when_current_creo_session_exits',
+      session_identity: bridge.identity,
       timings_ms: {
         bridge_start_or_reuse: Number(milliseconds(
           connectionFinished, connectionStarted).toFixed(1)),
@@ -2971,8 +3553,9 @@ function runPersistentFlatWall(args) {
       commandPath,
       `${[resultPath, ...args].join('\n')}\n`,
       'utf8');
-    ensurePersistentFlatWallBridge();
-    const response = requestPersistentFlatWall(commandPath);
+    const bridge = ensureInternalCreoBridge();
+    const response = requestPersistentFlatWall(
+      bridge.binding, commandPath);
     let data = null;
     if (fs.existsSync(resultPath)) {
       data = JSON.parse(
@@ -2987,17 +3570,299 @@ function runPersistentFlatWall(args) {
     return {
       ...(data || { ok: true }),
       persistent_bridge: true,
-      connection_reused: true,
+      resident_started: Boolean(bridge.resident_started),
+      connection_reused: !bridge.resident_started,
+      automatic_disconnect: 'when_current_creo_session_exits',
+      session_identity: bridge.identity,
     };
   } finally {
     fs.rmSync(runtimeDirectory, { recursive: true, force: true });
   }
 }
 
+function discoverWallMountContext() {
+  const session = runPersistentBasicModelRead();
+  const workingDirectory = path.resolve(session.working_directory || '');
+  if (!workingDirectory || !fs.existsSync(workingDirectory) ||
+      !fs.statSync(workingDirectory).isDirectory()) {
+    throw new Error('当前 Creo 会话没有有效工作目录。');
+  }
+  currentToolWorkingDirectory = workingDirectory;
+  const models = latestModelFamilies(workingDirectory);
+  const topAssembly = chooseTopAssembly(models);
+  const skeleton = chooseSkeleton(models, topAssembly.model_name);
+  return { session, workingDirectory, models, topAssembly, skeleton };
+}
+
+function openTopAssemblyAndReadSkeleton() {
+  const context = discoverWallMountContext();
+  const topPath = path.join(context.workingDirectory, context.topAssembly.file_name);
+  const display = runPersistentDisplayModel(
+    topPath, context.topAssembly.model_name);
+  let skeletonReadback = null;
+  if (context.skeleton) {
+    const skeletonPath = path.join(
+      context.workingDirectory, context.skeleton.file_name);
+    skeletonReadback = { model: context.skeleton };
+    try {
+      const featureResult = runBridge(
+        'creo_features_bridge.exe', [skeletonPath]);
+      const keyPattern = /(后框|前框|屏|玻璃|VESA|壁挂|风扇|过滤棉|气弹簧|铰链|圆角)/i;
+      skeletonReadback.feature_count = Array.isArray(featureResult.features)
+        ? featureResult.features.length : 0;
+      skeletonReadback.key_features = Array.isArray(featureResult.features)
+        ? featureResult.features
+          .filter((item) => keyPattern.test(item.name || ''))
+          .map((item) => ({
+            id: item.id, name: item.name, type: item.type, status: item.status,
+          }))
+        : [];
+    } catch (error) {
+      skeletonReadback.features_error = error.detail || { message: error.message };
+    }
+    try {
+      const dimensionResult = runBridge(
+        'creo_dimensions_bridge.exe', [skeletonPath]);
+      const keyIds = new Set(
+        (skeletonReadback.key_features || []).map((item) => item.id));
+      skeletonReadback.dimension_count = Array.isArray(dimensionResult.dimensions)
+        ? dimensionResult.dimensions.length : 0;
+      skeletonReadback.key_dimensions = Array.isArray(dimensionResult.dimensions)
+        ? dimensionResult.dimensions
+          .filter((item) => keyIds.has(item.owner_feature_id))
+          .map((item) => ({
+            id: item.id,
+            symbol: item.symbol,
+            value: item.value,
+            relation_driven: item.relation_driven,
+            owner_feature_id: item.owner_feature_id,
+            owner_feature_name: item.owner_feature_name,
+          }))
+        : [];
+    } catch (error) {
+      skeletonReadback.dimensions_error = error.detail || { message: error.message };
+    }
+  }
+  return {
+    ok: true,
+    working_directory: context.workingDirectory,
+    directory_source: 'current_creo_session',
+    top_assembly: context.topAssembly,
+    display_readback: display,
+    skeleton: skeletonReadback,
+    top_assembly_active: true,
+    readonly: true,
+  };
+}
+
+function readWallMountState() {
+  const opened = openTopAssemblyAndReadSkeleton();
+  const assemblyName = opened.top_assembly.model_name;
+  let components = null;
+  let componentsError = null;
+  let mass = null;
+  let massError = null;
+  let screenAssemblyComponents = null;
+  let screenAssemblyError = null;
+  try {
+    components = runBridge(
+      'creo_assembly_components_bridge.exe', [assemblyName]);
+  } catch (error) {
+    componentsError = error.detail || { message: error.message };
+  }
+  try {
+    mass = runBridge('creo_mass_properties_bridge.exe', [
+      path.join(opened.working_directory, opened.top_assembly.file_name),
+    ]);
+  } catch (error) {
+    massError = error.detail || { message: error.message };
+  }
+  const workingModels = latestModelFamilies(opened.working_directory);
+  const screenAssembly = workingModels.find((item) =>
+    item.model_type === 'asm' &&
+    item.model_name.toLowerCase() === 'm26z0163001-v01');
+  if (screenAssembly) {
+    try {
+      runPersistentDisplayModel(
+        path.join(opened.working_directory, screenAssembly.file_name),
+        screenAssembly.model_name);
+      screenAssemblyComponents = runBridge(
+        'creo_assembly_components_bridge.exe', [screenAssembly.model_name]);
+    } catch (error) {
+      screenAssemblyError = error.detail || { message: error.message };
+    } finally {
+      runPersistentDisplayModel(
+        path.join(opened.working_directory, opened.top_assembly.file_name),
+        opened.top_assembly.model_name);
+    }
+  }
+  const componentList = components && Array.isArray(components.components)
+    ? components.components : [];
+  const screenComponentList = screenAssemblyComponents &&
+    Array.isArray(screenAssemblyComponents.components)
+    ? screenAssemblyComponents.components : [];
+  const activeScreens = [...componentList, ...screenComponentList]
+    .map((item) => item.name || item.model || item.model_name || item.component_model)
+    .filter((name) => typeof name === 'string' && /^(?:32|43|49|55|65|75|86|98)inch$/i.test(name));
+  return {
+    ...opened,
+    assembly_components: components,
+    assembly_components_error: componentsError,
+    screen_assembly: screenAssembly || null,
+    screen_assembly_components: screenAssemblyComponents,
+    screen_assembly_error: screenAssemblyError,
+    active_screen_models: [...new Set(activeScreens)],
+    top_assembly_mass_properties: mass,
+    top_assembly_mass_properties_error: massError,
+    verification: {
+      top_assembly_read: true,
+      skeleton_read: Boolean(opened.skeleton),
+      components_read: Boolean(components),
+      screen_assembly_read: Boolean(screenAssemblyComponents),
+      mass_read: Boolean(mass),
+    },
+  };
+}
+
+function validateWallMountConversion(targetSize) {
+  const sizeRules = readSizeRules(ruleRoot);
+  const modelMap = readModelMap(ruleRoot);
+  const targetRule = sizeRules.products && sizeRules.products[targetSize];
+  if (!targetRule || targetRule.automation_enabled === false) {
+    throw new Error(`目标尺寸 ${targetSize} 未进入自动改型范围。`);
+  }
+  const state = readWallMountState();
+  const dimensions = state.skeleton?.key_dimensions || [];
+  const dimensionValue = (symbol, ownerName) => dimensions.find((item) =>
+    String(item.symbol).toLowerCase() === String(symbol).toLowerCase() &&
+    (!ownerName || item.owner_feature_name === ownerName))?.value;
+  const actualOuter = [
+    dimensionValue('d3', '后框'),
+    dimensionValue('d2', '后框'),
+  ];
+  const expectedScreen = `${targetSize}INCH`;
+  const activeScreens = state.active_screen_models || [];
+  const stages = buildConversionStages(targetSize, targetRule, modelMap);
+  const mapped = stages.filter((stage) =>
+    stage.status === 'mapping_verified').map((stage) => stage.stage);
+  const partial = stages.filter((stage) =>
+    stage.status === 'mapping_partially_verified').map((stage) => stage.stage);
+  const missing = stages.filter((stage) =>
+    stage.status === 'requires_verified_model_mapping').map((stage) => stage.stage);
+  const checks = [
+    {
+      name: '顶层装配与骨架可读',
+      passed: Boolean(state.verification?.top_assembly_read && state.verification?.skeleton_read),
+      actual: { top: state.top_assembly?.model_name, skeleton: state.skeleton?.model?.model_name },
+    },
+    {
+      name: '骨架外尺寸',
+      passed: actualOuter[0] === targetRule.outer[0] && actualOuter[1] === targetRule.outer[1],
+      expected: targetRule.outer,
+      actual: actualOuter,
+    },
+    {
+      name: '活动屏唯一且正确',
+      passed: activeScreens.length === 1 && activeScreens[0].toUpperCase() === expectedScreen,
+      expected: [expectedScreen],
+      actual: activeScreens,
+    },
+    {
+      name: '顶层质量完整读回',
+      passed: state.verification?.mass_read === true,
+      actual: state.top_assembly_mass_properties_error || state.top_assembly_mass_properties || null,
+    },
+  ];
+  const blockingItems = [];
+  if (partial.length) blockingItems.push(`部分映射步骤：${partial.join(', ')}`);
+  if (missing.length) blockingItems.push(`缺少映射步骤：${missing.join(', ')}`);
+  for (const check of checks) {
+    if (!check.passed) blockingItems.push(`未通过：${check.name}`);
+  }
+  blockingItems.push(
+    '前框气弹簧关闭压缩余量和力矩校核未完成',
+    '屏组件气弹簧完整质量、同状态角度差和力矩校核未完成',
+    '本工具为只读验收，不执行顶层重新生成或保存');
+  return {
+    ok: true,
+    readonly: true,
+    target_size: targetSize,
+    checks,
+    mapping: { verified_steps: mapped, partially_verified_steps: partial, missing_steps: missing },
+    acceptance_passed: blockingItems.length === 0,
+    blocking_items: blockingItems,
+    write_performed: false,
+    saved: false,
+  };
+}
+
 function handleToolCall(name, args) {
   // Every formal tool resolves files from the live directory selected in Creo.
   // Reset once per call so changing Creo's work directory takes effect immediately.
   currentToolWorkingDirectory = null;
+  if (name === 'creo_open_top_assembly') {
+    return toolResult(openTopAssemblyAndReadSkeleton());
+  }
+
+  if (name === 'creo_read_wall_mount_state') {
+    return toolResult(readWallMountState());
+  }
+
+  if (name === 'creo_validate_wall_mount_conversion') {
+    return toolResult(validateWallMountConversion(String(args.target_size || '')));
+  }
+
+  if (name === 'creo_regenerate_validate_save_top_assembly') {
+    const expectedAssembly = ensureCreoModelName(
+      args.expected_assembly, 'expected_assembly');
+    const saveAfterValidation = args.save_after_validation === true;
+    return toolResult(runBridge('creo_top_assembly_finalize_bridge.exe', [
+      expectedAssembly,
+      saveAfterValidation ? '1' : '0',
+    ]));
+  }
+
+  if (name === 'creo_convert_wall_mount_size') {
+    const targetSize = String(args.target_size || '');
+    const sizeRules = readSizeRules(ruleRoot);
+    const productRule = sizeRules.products && sizeRules.products[targetSize];
+    if (!productRule || productRule.automation_enabled === false) {
+      throw new Error(`目标尺寸 ${targetSize} 未进入自动改型范围。`);
+    }
+    const state = readWallMountState();
+    const modelMap = readModelMap(ruleRoot);
+    const stages = buildConversionStages(targetSize, productRule, modelMap);
+    stages[0].status = 'verified';
+    stages[0].readback = {
+      working_directory: state.working_directory,
+      top_assembly: state.top_assembly.model_name,
+      skeleton: state.skeleton && state.skeleton.model.model_name,
+      active_screen_models: state.active_screen_models,
+    };
+    const executable = args.execute_verified_steps === true;
+    return toolResult({
+      ok: true,
+      mode: executable ? 'safe_preflight_only' : 'plan_only',
+      target_size: targetSize,
+      target_rule: productRule,
+      stages,
+      mapped_stage_count: stages.filter((stage) =>
+        stage.status === 'mapping_verified' || stage.status === 'verified').length,
+      partially_mapped_stage_count: stages.filter((stage) =>
+        stage.status === 'mapping_partially_verified').length,
+      completed_stage_count: 1,
+      write_performed: false,
+      blocked_reason: executable
+        ? '部分流程仍缺少按当前模型读回确认的特征映射与完整验收规则；为防止改错模型，本次未写入。'
+        : null,
+      next_required_mapping: [
+        '风扇数量、阵列间距和对称位置',
+        '过滤棉规格与特征尺寸',
+        '两组气弹簧的完整计算、型号切换、支架位置和开合验证',
+        '顶层重新生成、错误检查与保存验证',
+      ],
+    });
+  }
   if (name === 'creo_set_current_hinge_pattern') {
     const newCount = Number(args.new_count);
     if (!Number.isInteger(newCount) || newCount < 2 || newCount > 1000) {
@@ -3110,7 +3975,31 @@ function handleToolCall(name, args) {
   }
 
   if (name === 'creo_start_resident_and_get_basic_model') {
-    return toolResult(runPersistentBasicModelRead());
+    const basic = runPersistentBasicModelRead();
+    let wallMountContext = null;
+    let wallMountContextError = null;
+    if (basic.model_open === true) {
+      try {
+        const context = openTopAssemblyAndReadSkeleton();
+        wallMountContext = {
+          working_directory: context.working_directory,
+          top_assembly: context.top_assembly,
+          skeleton: context.skeleton,
+          top_assembly_active: context.top_assembly_active,
+          readonly: true,
+        };
+      } catch (error) {
+        wallMountContextError = {
+          non_blocking: true,
+          message: error && error.message ? error.message : String(error),
+        };
+      }
+    }
+    return toolResult({
+      ...basic,
+      first_command_context: wallMountContext,
+      first_command_context_error: wallMountContextError,
+    });
   }
 
   if (name === 'creo_set_project_working_directory') {
@@ -3166,7 +4055,7 @@ function handleToolCall(name, args) {
   if (name === 'creo_create_project_sheetmetal_planar_wall') {
     const projectDirectory = resolveCurrentCreoWorkingDirectory();
     const modelName = ensureCreoModelName(args.model_name, 'model_name');
-    const featureName = ensureCreoModelName(args.feature_name, 'feature_name');
+    const featureName = ensureCreoFeatureName(args.feature_name, 'feature_name');
     const length = Number(args.length);
     const width = Number(args.width);
     const thickness = Number(args.thickness);
@@ -4045,7 +4934,9 @@ function handleToolCall(name, args) {
   if (name === 'creo_modify_project_feature_dimensions') {
     const projectDirectory = resolveCurrentCreoWorkingDirectory();
     const expectedModel = ensureCreoModelName(args.expected_model, 'expected_model');
-    const featureName = ensureCreoModelName(args.feature_name, 'feature_name');
+    const featureName = ensureCreoFeatureName(args.feature_name, 'feature_name');
+    const topAssembly = args.top_assembly === undefined
+      ? null : ensureCreoModelName(args.top_assembly, 'top_assembly');
     if (!Array.isArray(args.modifications) ||
         args.modifications.length < 1 || args.modifications.length > 8) {
       throw new Error('modifications 必须包含 1-8 项尺寸修改。');
@@ -4066,12 +4957,12 @@ function handleToolCall(name, args) {
       const expectedValue = ensureFiniteNumber(
         item.expected_value,
         `modifications[${index}].expected_value`,
-        0.000001,
+        0,
         1000000);
       const newValue = ensureFiniteNumber(
         item.new_value,
         `modifications[${index}].new_value`,
-        0.000001,
+        0,
         1000000);
       flattened.push(symbol, String(expectedValue), String(newValue));
     }
@@ -4081,9 +4972,71 @@ function handleToolCall(name, args) {
       featureName,
       String(args.modifications.length),
       ...flattened,
+      ...(topAssembly ? [topAssembly] : []),
     ]);
     return toolResult(withProjectModelCleanup(
       projectDirectory, result, [result.saved_file]));
+  }
+
+  if (name === 'creo_rename_current_project_part') {
+    const projectDirectory = resolveCurrentCreoWorkingDirectory();
+    const expectedName = ensureCreoModelName(args.expected_name, 'expected_name');
+    const targetName = ensureCreoModelName(args.target_name, 'target_name');
+    runBridge('creo_project_workdir_bridge.exe', [projectDirectory]);
+    const result = runBridge('creo_model_rename_bridge.exe', [expectedName, targetName]);
+    return toolResult(result);
+  }
+
+  if (name === 'creo_create_project_gas_spring_variant') {
+    const projectDirectory = resolveCurrentCreoWorkingDirectory();
+    const expectedAssembly = ensureCreoModelName(
+      args.expected_assembly, 'expected_assembly');
+    const targetAssembly = ensureCreoModelName(
+      args.target_assembly, 'target_assembly');
+    const expectedDown = ensureCreoModelName(
+      args.expected_down_part, 'expected_down_part');
+    const targetDown = ensureCreoModelName(
+      args.target_down_part, 'target_down_part');
+    const expectedUp = ensureCreoModelName(
+      args.expected_up_part, 'expected_up_part');
+    const targetUp = ensureCreoModelName(
+      args.target_up_part, 'target_up_part');
+    const expectedStroke = ensureFiniteNumber(
+      args.expected_stroke, 'expected_stroke', 0, 1000000);
+    const newStroke = ensureFiniteNumber(
+      args.new_stroke, 'new_stroke', 0, 1000000);
+    const expectedCompensation = ensureFiniteNumber(
+      args.expected_up_compensation, 'expected_up_compensation', 0, 1000000);
+    const newCompensation = ensureFiniteNumber(
+      args.new_up_compensation, 'new_up_compensation', 0, 1000000);
+    const expectedTranslationMax = ensureFiniteNumber(
+      args.expected_translation_max, 'expected_translation_max', 0, 1000000);
+    const newTranslationMax = ensureFiniteNumber(
+      args.new_translation_max, 'new_translation_max', 0, 1000000);
+    if (new Set([
+      targetAssembly.toLowerCase(),
+      targetDown.toLowerCase(),
+      targetUp.toLowerCase(),
+    ]).size !== 3) {
+      throw new Error('三个目标模型名称必须互不相同。');
+    }
+    runBridge('creo_project_workdir_bridge.exe', [projectDirectory]);
+    const result = runBridge('creo_gas_spring_variant_bridge.exe', [
+      expectedAssembly,
+      targetAssembly,
+      expectedDown,
+      targetDown,
+      expectedUp,
+      targetUp,
+      String(expectedStroke),
+      String(newStroke),
+      String(expectedCompensation),
+      String(newCompensation),
+      String(expectedTranslationMax),
+      String(newTranslationMax),
+    ]);
+    return toolResult(withProjectModelCleanup(
+      projectDirectory, result, result.saved_files || []));
   }
 
   if (name === 'creo_create_project_general_sketch') {
@@ -4241,7 +5194,8 @@ function handleToolCall(name, args) {
 
   if (name === 'creo_get_mass_properties') {
     if (args.model_file) {
-      const modelFile = resolveSafeModelFile(args.model_file);
+      const modelFile = resolveWorkingDirectoryPartOrAssemblyFile(
+        resolveCurrentCreoWorkingDirectory(), args.model_file);
       return toolResult(runBridge('creo_mass_properties_bridge.exe', [modelFile]));
     }
     return toolResult(runBridge('creo_mass_properties_bridge.exe', []));
@@ -4872,8 +5826,8 @@ function handleRequest(request) {
             ? request.params.protocolVersion
             : '2025-06-18',
           capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: 'creo-safe-bridge', version: '0.9.0' },
-          instructions: 'Creo 必须已在同一 Windows 会话中运行。每次新开 Creo 并选好工作目录后的首次命令，先调用 creo_start_resident_and_get_basic_model，快速建立会话绑定常驻桥接并读取基础模型信息；关闭该次 Creo 后桥接自动退出。读取工具不修改模型；写入工具拒绝覆盖或核对预期旧值，并在写入后验证。所有创建、读取、修改、装配、导出和清理工具都必须先读取当前 Creo 会话已经选择的工作目录，并且只能操作该目录的直接子文件；禁止接收 project_name、固定项目根目录或调用方提供的目录路径。以后新增的 Creo 工具也必须遵守相同规则。装配体、骨架、骨架实体、通用草绘及重合/对齐装配工具通过 Pro/TOOLKIT 正式接口执行。通用尺寸修改工具会核对当前零件、所属特征、尺寸符号、预期旧值和关系驱动状态；通用草绘工具会核对当前零件、承载平面、定向平面、特征名以及每个直线、圆和圆弧实体；重合/对齐装配工具会核对当前装配体、组件模型、全部平面引用、约束类型、基准侧与欠约束状态。任一失败都会在保存前回滚。成功保存后只把本次目标 .prt/.asm 模型族的旧版本移入 Windows 回收站，组件和无关文件保持不变。',
+          serverInfo: { name: 'creo-safe-bridge', version: '0.14.0' },
+          instructions: 'Creo 必须已在同一 Windows 会话中运行。每次新开 Creo 并选好工作目录后的首次命令，先调用 creo_start_resident_and_get_basic_model，绑定 PID、启动时间和专属管道，读取当前工作目录、当前模型、顶层装配和骨架基本数据；关闭该次 Creo 后桥接自动退出。读取工具不修改模型；写入工具拒绝覆盖或核对预期旧值，并在写入后验证。所有创建、读取、修改、装配、导出和清理工具都必须先读取当前 Creo 会话已经选择的工作目录，并且只能操作该目录的直接子文件；禁止接收 project_name、固定项目根目录或调用方提供的目录路径。以后新增的 Creo 工具也必须遵守相同规则。装配体、骨架、骨架实体、通用草绘及重合/对齐装配工具通过 Pro/TOOLKIT 正式接口执行。任一失败都必须报告真实阶段和错误码，无法验证的项目视为阻塞；顶层重新生成和全部强制检查通过后才能保存。',
         },
       });
       return;

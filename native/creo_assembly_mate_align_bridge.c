@@ -222,7 +222,7 @@ static int find_latest_saved_assembly(
     return found;
 }
 
-int wmain(int argc, wchar_t **argv)
+static int standard_main(int argc, wchar_t **argv)
 {
     FILE *out = stdout;
     ProError status;
@@ -755,4 +755,684 @@ cleanup:
 done:
     fclose(out);
     return exit_code;
+}
+
+typedef struct named_component_search
+{
+    const wchar_t *name;
+    ProFeature feature;
+    ProMdl model;
+    int count;
+} NamedComponentSearch;
+
+static ProError named_component_action(
+    ProFeature *feature,
+    ProError filter_status,
+    ProAppData app_data)
+{
+    NamedComponentSearch *search = (NamedComponentSearch *)app_data;
+    ProFeattype type = PRO_FEAT_INVALID;
+    ProFeatStatus feature_status = PRO_FEAT_INVALID;
+    ProMdl model = NULL;
+    ProMdlName name;
+    (void)filter_status;
+    if (ProFeatureTypeGet(feature, &type) != PRO_TK_NO_ERROR ||
+        type != PRO_FEAT_COMPONENT ||
+        ProFeatureStatusGet(feature, &feature_status) != PRO_TK_NO_ERROR ||
+        feature_status != PRO_FEAT_ACTIVE ||
+        ProAsmcompMdlGet((ProAsmcomp *)feature, &model) != PRO_TK_NO_ERROR ||
+        ProMdlNameGet(model, name) != PRO_TK_NO_ERROR ||
+        _wcsicmp(name, search->name) != 0)
+        return PRO_TK_NO_ERROR;
+    search->feature = *feature;
+    search->model = model;
+    ++search->count;
+    return PRO_TK_NO_ERROR;
+}
+
+static ProError named_component_find(
+    ProSolid owner,
+    const wchar_t *name,
+    ProFeature *feature,
+    ProMdl *model)
+{
+    NamedComponentSearch search;
+    ProError status;
+    memset(&search, 0, sizeof(search));
+    search.name = name;
+    search.feature.id = -1;
+    status = ProSolidFeatVisit(
+        owner, named_component_action, NULL, (ProAppData)&search);
+    if (status != PRO_TK_NO_ERROR)
+        return status;
+    if (search.count != 1)
+        return PRO_TK_BAD_CONTEXT;
+    *feature = search.feature;
+    *model = search.model;
+    return PRO_TK_NO_ERROR;
+}
+
+static int nested_named_mate_main(int argc, wchar_t **argv)
+{
+    FILE *out = stdout;
+    ProError status;
+    ProError disconnect_status;
+    ProBoolean random_choice = PRO_B_FALSE;
+    ProProcessHandle process_handle;
+    ProMdl assembly_model = NULL;
+    ProMdl parent_model = NULL;
+    ProMdl host_model = NULL;
+    ProMdl component_model = NULL;
+    ProMdlType model_type;
+    ProMdlName actual_name;
+    ProPath component_path;
+    ProPath working_directory;
+    ProPath saved_path;
+    ProFeature parent_feature;
+    ProFeature host_feature;
+    ProAsmcomp component_feature;
+    ProIdTable host_ids;
+    ProAsmcomppath host_path;
+    ProMatrix placement = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0}
+    };
+    ProMatrix readback_position;
+    ProModelitem host_items[MAX_PLANE_CONSTRAINTS];
+    ProModelitem component_items[MAX_PLANE_CONSTRAINTS];
+    ProSelection host_selections[MAX_PLANE_CONSTRAINTS] = {NULL, NULL, NULL};
+    ProSelection component_selections[MAX_PLANE_CONSTRAINTS] = {NULL, NULL, NULL};
+    ProAsmcompconstraint *constraints = NULL;
+    ProAsmcompconstraint *readback_constraints = NULL;
+    ProAsmcompconstraint pending_constraint = NULL;
+    ProFeatStatus component_status = PRO_FEAT_INVALID;
+    ProBoolean is_packaged = PRO_B_TRUE;
+    ProBoolean is_underconstrained = PRO_B_TRUE;
+    int source_component_count = 0;
+    int final_component_count = 0;
+    int readback_count = 0;
+    int connected = 0;
+    int component_created = 0;
+    int saved = 0;
+    int window_id = -1;
+    int index;
+    int other;
+    int exit_code = 1;
+
+    memset(&parent_feature, 0, sizeof(parent_feature));
+    memset(&host_feature, 0, sizeof(host_feature));
+    memset(&component_feature, 0, sizeof(component_feature));
+    component_feature.id = -1;
+    if (argc != 11)
+        return 2;
+    if (_wfopen_s(&out, argv[1], L"wb") != 0 || out == NULL)
+        return 2;
+    if (_wcsicmp(argv[2], L"--nested-mate") != 0 ||
+        _wcsicmp(argv[5], argv[7]) == 0)
+    {
+        exit_code = write_error(out, "nested_input_guard", PRO_TK_BAD_INPUTS);
+        goto done;
+    }
+    for (index = 8; index <= 10; ++index)
+        for (other = index + 1; other <= 10; ++other)
+            if (_wcsicmp(argv[index], argv[other]) == 0)
+            {
+                exit_code = write_error(
+                    out, "duplicate_plane_name", PRO_TK_BAD_INPUTS);
+                goto done;
+            }
+    wcsncpy_s(component_path,
+        sizeof(component_path) / sizeof(component_path[0]),
+        argv[6], _TRUNCATE);
+    if (GetFileAttributesW(component_path) == INVALID_FILE_ATTRIBUTES)
+    {
+        exit_code = write_error(out, "component_file", PRO_TK_E_NOT_FOUND);
+        goto done;
+    }
+
+    status = ProEngineerConnect(
+        "", "", "", "", PRO_B_TRUE, 20,
+        &random_choice, &process_handle);
+    if (status != PRO_TK_NO_ERROR)
+    {
+        exit_code = write_error(out, "connect", status);
+        goto done;
+    }
+    connected = 1;
+    status = ProMdlCurrentGet(&assembly_model);
+    if (status == PRO_TK_NO_ERROR)
+        status = ProMdlTypeGet(assembly_model, &model_type);
+    if (status == PRO_TK_NO_ERROR)
+        status = ProMdlNameGet(assembly_model, actual_name);
+    if (status != PRO_TK_NO_ERROR || model_type != PRO_MDL_ASSEMBLY ||
+        _wcsicmp(actual_name, argv[3]) != 0)
+    {
+        exit_code = write_error(out, "assembly_guard",
+            status == PRO_TK_NO_ERROR ? PRO_TK_BAD_CONTEXT : status);
+        goto cleanup;
+    }
+    status = active_component_count_get(
+        (ProAssembly)assembly_model, &source_component_count);
+    if (status != PRO_TK_NO_ERROR)
+    {
+        exit_code = write_error(out, "source_component_count", status);
+        goto cleanup;
+    }
+    {
+        NamedComponentSearch duplicate_search;
+        memset(&duplicate_search, 0, sizeof(duplicate_search));
+        duplicate_search.name = argv[7];
+        status = ProSolidFeatVisit(
+            (ProSolid)assembly_model,
+            named_component_action,
+            NULL,
+            (ProAppData)&duplicate_search);
+        if (status != PRO_TK_NO_ERROR || duplicate_search.count != 0)
+        {
+            exit_code = write_error(out, "existing_component_guard",
+                status == PRO_TK_NO_ERROR ? PRO_TK_BAD_CONTEXT : status);
+            goto cleanup;
+        }
+    }
+    status = named_component_find(
+        (ProSolid)assembly_model, argv[4], &parent_feature, &parent_model);
+    if (status == PRO_TK_NO_ERROR)
+        status = ProMdlTypeGet(parent_model, &model_type);
+    if (status != PRO_TK_NO_ERROR || model_type != PRO_MDL_ASSEMBLY)
+    {
+        exit_code = write_error(out, "parent_component_guard",
+            status == PRO_TK_NO_ERROR ? PRO_TK_INVALID_TYPE : status);
+        goto cleanup;
+    }
+    status = named_component_find(
+        (ProSolid)parent_model, argv[5], &host_feature, &host_model);
+    if (status == PRO_TK_NO_ERROR)
+        status = ProMdlTypeGet(host_model, &model_type);
+    if (status != PRO_TK_NO_ERROR || model_type != PRO_MDL_PART)
+    {
+        exit_code = write_error(out, "host_component_guard",
+            status == PRO_TK_NO_ERROR ? PRO_TK_INVALID_TYPE : status);
+        goto cleanup;
+    }
+    host_ids[0] = parent_feature.id;
+    host_ids[1] = host_feature.id;
+    status = ProAsmcomppathInit(
+        (ProSolid)assembly_model, host_ids, 2, &host_path);
+    if (status != PRO_TK_NO_ERROR)
+    {
+        exit_code = write_error(out, "host_component_path", status);
+        goto cleanup;
+    }
+    status = ProMdlFiletypeLoad(
+        component_path, PRO_MDLFILE_PART, PRO_B_FALSE, &component_model);
+    if (status == PRO_TK_NO_ERROR)
+        status = ProMdlNameGet(component_model, actual_name);
+    if (status != PRO_TK_NO_ERROR || _wcsicmp(actual_name, argv[7]) != 0)
+    {
+        exit_code = write_error(out, "component_name_guard",
+            status == PRO_TK_NO_ERROR ? PRO_TK_BAD_CONTEXT : status);
+        goto cleanup;
+    }
+    for (index = 0; index < MAX_PLANE_CONSTRAINTS; ++index)
+    {
+        status = named_planar_surface_get(
+            host_model, argv[8 + index], &host_items[index]);
+        if (status == PRO_TK_NO_ERROR)
+            status = named_planar_surface_get(
+                component_model, argv[8 + index], &component_items[index]);
+        if (status != PRO_TK_NO_ERROR)
+        {
+            exit_code = write_error(out, "named_plane_guard", status);
+            goto cleanup;
+        }
+    }
+    status = ProAsmcompAssemble(
+        (ProAssembly)assembly_model,
+        (ProSolid)component_model,
+        placement,
+        &component_feature);
+    if (status != PRO_TK_NO_ERROR)
+    {
+        exit_code = write_error(out, "assemble_component", status);
+        goto cleanup;
+    }
+    component_created = 1;
+    status = ProArrayAlloc(
+        0, sizeof(ProAsmcompconstraint), 1, (ProArray *)&constraints);
+    if (status != PRO_TK_NO_ERROR)
+    {
+        exit_code = write_error(out, "constraint_array_alloc", status);
+        goto cleanup;
+    }
+    for (index = 0; index < MAX_PLANE_CONSTRAINTS; ++index)
+    {
+        status = ProSelectionAlloc(
+            &host_path, &host_items[index], &host_selections[index]);
+        if (status == PRO_TK_NO_ERROR)
+            status = ProSelectionAlloc(
+                NULL, &component_items[index], &component_selections[index]);
+        if (status == PRO_TK_NO_ERROR)
+            status = ProAsmcompconstraintAlloc(&pending_constraint);
+        if (status == PRO_TK_NO_ERROR)
+            status = ProAsmcompconstraintTypeSet(
+                pending_constraint,
+                index == 0 ? PRO_ASM_ALIGN : PRO_ASM_MATE);
+        if (status == PRO_TK_NO_ERROR)
+            status = ProAsmcompconstraintAsmreferenceSet(
+                pending_constraint,
+                host_selections[index],
+                PRO_DATUM_SIDE_YELLOW);
+        if (status == PRO_TK_NO_ERROR)
+            status = ProAsmcompconstraintCompreferenceSet(
+                pending_constraint,
+                component_selections[index],
+                PRO_DATUM_SIDE_YELLOW);
+        if (status == PRO_TK_NO_ERROR)
+            status = ProArrayObjectAdd(
+                (ProArray *)&constraints,
+                PRO_VALUE_UNUSED,
+                1,
+                &pending_constraint);
+        if (status != PRO_TK_NO_ERROR)
+        {
+            exit_code = write_error(out, "constraint_build", status);
+            goto cleanup;
+        }
+        pending_constraint = NULL;
+    }
+    status = ProAsmcompConstraintsSet(NULL, &component_feature, constraints);
+    if (status != PRO_TK_NO_ERROR)
+    {
+        exit_code = write_error(out, "set_constraints", status);
+        goto cleanup;
+    }
+    status = ProSolidRegenerate(
+        (ProSolid)assembly_model, PRO_REGEN_NO_FLAGS);
+    if (status != PRO_TK_NO_ERROR)
+    {
+        exit_code = write_error(out, "regenerate_assembly", status);
+        goto cleanup;
+    }
+    status = ProAsmcompConstraintsWithComppathGet(
+        &component_feature, NULL, &readback_constraints);
+    if (status == PRO_TK_NO_ERROR)
+        status = ProArraySizeGet(
+            (ProArray)readback_constraints, &readback_count);
+    if (status != PRO_TK_NO_ERROR || readback_count != MAX_PLANE_CONSTRAINTS)
+    {
+        exit_code = write_error(out, "constraint_count_readback",
+            status == PRO_TK_NO_ERROR ? PRO_TK_GENERAL_ERROR : status);
+        goto cleanup;
+    }
+    for (index = 0; index < MAX_PLANE_CONSTRAINTS; ++index)
+    {
+        ProAsmcompConstrType type = PRO_ASM_UNDEF;
+        ProSelection assembly_reference = NULL;
+        ProSelection component_reference = NULL;
+        ProDatumside assembly_side = PRO_DATUM_SIDE_NONE;
+        ProDatumside component_side = PRO_DATUM_SIDE_NONE;
+        ProModelitem assembly_item;
+        ProModelitem component_item;
+        ProName assembly_plane_name;
+        ProName component_plane_name;
+        ProMdlName assembly_owner_name;
+        ProMdlName component_owner_name;
+        status = ProAsmcompconstraintTypeGet(
+            readback_constraints[index], &type);
+        if (status == PRO_TK_NO_ERROR)
+            status = ProAsmcompconstraintAsmreferenceGet(
+                readback_constraints[index],
+                &assembly_reference,
+                &assembly_side);
+        if (status == PRO_TK_NO_ERROR)
+            status = ProAsmcompconstraintCompreferenceGet(
+                readback_constraints[index],
+                &component_reference,
+                &component_side);
+        if (status == PRO_TK_NO_ERROR)
+            status = ProSelectionModelitemGet(
+                assembly_reference, &assembly_item);
+        if (status == PRO_TK_NO_ERROR)
+            status = ProSelectionModelitemGet(
+                component_reference, &component_item);
+        if (status == PRO_TK_NO_ERROR)
+            status = ProModelitemNameGet(
+                &assembly_item, assembly_plane_name);
+        if (status == PRO_TK_NO_ERROR)
+            status = ProModelitemNameGet(
+                &component_item, component_plane_name);
+        if (status == PRO_TK_NO_ERROR)
+            status = ProMdlNameGet(
+                assembly_item.owner, assembly_owner_name);
+        if (status == PRO_TK_NO_ERROR)
+            status = ProMdlNameGet(
+                component_item.owner, component_owner_name);
+        if (assembly_reference != NULL)
+            ProSelectionFree(&assembly_reference);
+        if (component_reference != NULL)
+            ProSelectionFree(&component_reference);
+        if (status != PRO_TK_NO_ERROR ||
+            type != (index == 0 ? PRO_ASM_ALIGN : PRO_ASM_MATE) ||
+            assembly_side != PRO_DATUM_SIDE_YELLOW ||
+            component_side != PRO_DATUM_SIDE_YELLOW ||
+            _wcsicmp(assembly_owner_name, argv[5]) != 0 ||
+            _wcsicmp(component_owner_name, argv[7]) != 0 ||
+            _wcsicmp(assembly_plane_name, argv[8 + index]) != 0 ||
+            _wcsicmp(component_plane_name, argv[8 + index]) != 0)
+        {
+            exit_code = write_error(out, "constraint_reference_readback",
+                status == PRO_TK_NO_ERROR ? PRO_TK_GENERAL_ERROR : status);
+            goto cleanup;
+        }
+    }
+    status = ProFeatureStatusGet(
+        (ProFeature *)&component_feature, &component_status);
+    if (status == PRO_TK_NO_ERROR)
+        status = ProAsmcompIsPackaged(&component_feature, &is_packaged);
+    if (status == PRO_TK_NO_ERROR)
+        status = ProAsmcompIsUnderconstrained(
+            &component_feature, &is_underconstrained);
+    if (status == PRO_TK_NO_ERROR)
+        status = ProAsmcompPositionGet(
+            &component_feature, readback_position);
+    if (status != PRO_TK_NO_ERROR ||
+        component_status != PRO_FEAT_ACTIVE ||
+        is_packaged == PRO_B_TRUE ||
+        is_underconstrained == PRO_B_TRUE)
+    {
+        exit_code = write_error(out, "component_state_readback",
+            status == PRO_TK_NO_ERROR ? PRO_TK_GENERAL_ERROR : status);
+        goto cleanup;
+    }
+    status = active_component_count_get(
+        (ProAssembly)assembly_model, &final_component_count);
+    if (status != PRO_TK_NO_ERROR ||
+        final_component_count != source_component_count + 1)
+    {
+        exit_code = write_error(out, "final_component_count",
+            status == PRO_TK_NO_ERROR ? PRO_TK_GENERAL_ERROR : status);
+        goto cleanup;
+    }
+    status = ProDirectoryCurrentGet(working_directory);
+    if (status == PRO_TK_NO_ERROR)
+        status = ProMdlSave(assembly_model);
+    if (status != PRO_TK_NO_ERROR)
+    {
+        exit_code = write_error(out, "save_assembly", status);
+        goto cleanup;
+    }
+    saved = 1;
+    if (!find_latest_saved_assembly(
+            working_directory,
+            argv[3],
+            saved_path,
+            sizeof(saved_path) / sizeof(saved_path[0])))
+    {
+        exit_code = write_error(
+            out, "verify_saved_assembly", PRO_TK_E_NOT_FOUND);
+        goto cleanup;
+    }
+    if (ProWindowCurrentGet(&window_id) == PRO_TK_NO_ERROR)
+    {
+        ProWindowActivate(window_id);
+        ProWindowRefit(window_id);
+        ProWindowRepaint(window_id);
+    }
+    fputs("{\"ok\":true,\"api_only\":true,\"nested_reference\":true,", out);
+    fputs("\"assembly\":", out);
+    write_wide_json_string(out, argv[3]);
+    fputs(",\"parent_component\":", out);
+    write_wide_json_string(out, argv[4]);
+    fputs(",\"host_component\":", out);
+    write_wide_json_string(out, argv[5]);
+    fputs(",\"component\":", out);
+    write_wide_json_string(out, argv[7]);
+    fprintf(out,
+        ",\"component_feature_id\":%d,\"constraint_count\":3,"
+        "\"constraint_types\":[\"align\",\"mate\",\"mate\"],"
+        "\"is_packaged\":false,"
+        "\"is_underconstrained\":false,"
+        "\"readback_translation\":[%.17g,%.17g,%.17g],"
+        "\"saved_file\":",
+        component_feature.id,
+        readback_position[3][0],
+        readback_position[3][1],
+        readback_position[3][2]);
+    write_wide_json_string(out, saved_path);
+    fputs("}\n", out);
+    exit_code = 0;
+
+cleanup:
+    if (pending_constraint != NULL)
+        ProAsmcompconstraintFree(pending_constraint);
+    if (readback_constraints != NULL)
+        ProAsmcompconstraintArrayFree(readback_constraints);
+    if (constraints != NULL)
+        ProAsmcompconstraintArrayFree(constraints);
+    for (index = 0; index < MAX_PLANE_CONSTRAINTS; ++index)
+    {
+        if (component_selections[index] != NULL)
+            ProSelectionFree(&component_selections[index]);
+        if (host_selections[index] != NULL)
+            ProSelectionFree(&host_selections[index]);
+    }
+    if (exit_code != 0 && component_created && !saved && assembly_model != NULL)
+    {
+        int feature_id = component_feature.id;
+        ProFeatureDeleteOptions delete_option = PRO_FEAT_DELETE_NO_OPTS;
+        ProFeatureDelete(
+            (ProSolid)assembly_model,
+            &feature_id,
+            1,
+            &delete_option,
+            1);
+        ProSolidRegenerate((ProSolid)assembly_model, PRO_REGEN_NO_FLAGS);
+    }
+    if (connected)
+    {
+        disconnect_status = ProEngineerDisconnect(&process_handle, 10);
+        if (disconnect_status != PRO_TK_NO_ERROR && exit_code == 0)
+            exit_code = 3;
+    }
+done:
+    fclose(out);
+    return exit_code;
+}
+
+static int add_unconstrained_main(int argc, wchar_t **argv)
+{
+    FILE *out = stdout;
+    ProError status;
+    ProError disconnect_status;
+    ProBoolean random_choice = PRO_B_FALSE;
+    ProProcessHandle process_handle;
+    ProMdl assembly_model = NULL;
+    ProMdl component_model = NULL;
+    ProMdlType model_type;
+    ProMdlName actual_name;
+    ProPath component_path;
+    ProPath working_directory;
+    ProPath saved_path;
+    ProAsmcomp component_feature;
+    ProMatrix placement = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0}
+    };
+    ProFeatStatus component_status = PRO_FEAT_INVALID;
+    int source_component_count = 0;
+    int final_component_count = 0;
+    int connected = 0;
+    int component_created = 0;
+    int saved = 0;
+    int exit_code = 1;
+
+    memset(&component_feature, 0, sizeof(component_feature));
+    component_feature.id = -1;
+    if (argc != 6)
+        return 2;
+    if (_wfopen_s(&out, argv[1], L"wb") != 0 || out == NULL)
+        return 2;
+    if (_wcsicmp(argv[2], L"--add-unconstrained") != 0)
+    {
+        exit_code = write_error(out, "unconstrained_input_guard", PRO_TK_BAD_INPUTS);
+        goto done;
+    }
+    wcsncpy_s(component_path,
+        sizeof(component_path) / sizeof(component_path[0]),
+        argv[4], _TRUNCATE);
+    if (GetFileAttributesW(component_path) == INVALID_FILE_ATTRIBUTES)
+    {
+        exit_code = write_error(out, "component_file", PRO_TK_E_NOT_FOUND);
+        goto done;
+    }
+
+    status = ProEngineerConnect(
+        "", "", "", "", PRO_B_TRUE, 20,
+        &random_choice, &process_handle);
+    if (status != PRO_TK_NO_ERROR)
+    {
+        exit_code = write_error(out, "connect", status);
+        goto done;
+    }
+    connected = 1;
+    status = ProMdlCurrentGet(&assembly_model);
+    if (status == PRO_TK_NO_ERROR)
+        status = ProMdlTypeGet(assembly_model, &model_type);
+    if (status == PRO_TK_NO_ERROR)
+        status = ProMdlNameGet(assembly_model, actual_name);
+    if (status != PRO_TK_NO_ERROR || model_type != PRO_MDL_ASSEMBLY ||
+        _wcsicmp(actual_name, argv[3]) != 0)
+    {
+        exit_code = write_error(out, "assembly_guard",
+            status == PRO_TK_NO_ERROR ? PRO_TK_BAD_CONTEXT : status);
+        goto cleanup;
+    }
+    status = active_component_count_get(
+        (ProAssembly)assembly_model, &source_component_count);
+    if (status != PRO_TK_NO_ERROR)
+    {
+        exit_code = write_error(out, "source_component_count", status);
+        goto cleanup;
+    }
+    {
+        NamedComponentSearch duplicate_search;
+        memset(&duplicate_search, 0, sizeof(duplicate_search));
+        duplicate_search.name = argv[5];
+        status = ProSolidFeatVisit(
+            (ProSolid)assembly_model,
+            named_component_action,
+            NULL,
+            (ProAppData)&duplicate_search);
+        if (status != PRO_TK_NO_ERROR || duplicate_search.count != 0)
+        {
+            exit_code = write_error(out, "existing_component_guard",
+                status == PRO_TK_NO_ERROR ? PRO_TK_BAD_CONTEXT : status);
+            goto cleanup;
+        }
+    }
+    status = ProMdlFiletypeLoad(
+        component_path, PRO_MDLFILE_PART, PRO_B_FALSE, &component_model);
+    if (status == PRO_TK_NO_ERROR)
+        status = ProMdlNameGet(component_model, actual_name);
+    if (status != PRO_TK_NO_ERROR || _wcsicmp(actual_name, argv[5]) != 0)
+    {
+        exit_code = write_error(out, "component_name_guard",
+            status == PRO_TK_NO_ERROR ? PRO_TK_BAD_CONTEXT : status);
+        goto cleanup;
+    }
+    status = ProAsmcompAssemble(
+        (ProAssembly)assembly_model,
+        (ProSolid)component_model,
+        placement,
+        &component_feature);
+    if (status != PRO_TK_NO_ERROR)
+    {
+        exit_code = write_error(out, "assemble_component", status);
+        goto cleanup;
+    }
+    component_created = 1;
+    status = ProSolidRegenerate(
+        (ProSolid)assembly_model, PRO_REGEN_NO_FLAGS);
+    if (status == PRO_TK_NO_ERROR)
+        status = ProFeatureStatusGet(
+            (ProFeature *)&component_feature, &component_status);
+    if (status != PRO_TK_NO_ERROR || component_status != PRO_FEAT_ACTIVE)
+    {
+        exit_code = write_error(out, "component_state_readback",
+            status == PRO_TK_NO_ERROR ? PRO_TK_GENERAL_ERROR : status);
+        goto cleanup;
+    }
+    status = active_component_count_get(
+        (ProAssembly)assembly_model, &final_component_count);
+    if (status != PRO_TK_NO_ERROR ||
+        final_component_count != source_component_count + 1)
+    {
+        exit_code = write_error(out, "final_component_count",
+            status == PRO_TK_NO_ERROR ? PRO_TK_GENERAL_ERROR : status);
+        goto cleanup;
+    }
+    status = ProDirectoryCurrentGet(working_directory);
+    if (status == PRO_TK_NO_ERROR)
+        status = ProMdlSave(assembly_model);
+    if (status != PRO_TK_NO_ERROR)
+    {
+        exit_code = write_error(out, "save_assembly", status);
+        goto cleanup;
+    }
+    saved = 1;
+    if (!find_latest_saved_assembly(
+            working_directory,
+            argv[3],
+            saved_path,
+            sizeof(saved_path) / sizeof(saved_path[0])))
+    {
+        exit_code = write_error(out, "verify_saved_assembly", PRO_TK_E_NOT_FOUND);
+        goto cleanup;
+    }
+    fputs("{\"ok\":true,\"api_only\":true,\"constraint_count\":0,", out);
+    fputs("\"assembly\":", out);
+    write_wide_json_string(out, argv[3]);
+    fputs(",\"component\":", out);
+    write_wide_json_string(out, argv[5]);
+    fprintf(out, ",\"component_feature_id\":%d,\"saved_file\":",
+        component_feature.id);
+    write_wide_json_string(out, saved_path);
+    fputs("}\n", out);
+    exit_code = 0;
+
+cleanup:
+    if (exit_code != 0 && component_created && !saved && assembly_model != NULL)
+    {
+        int feature_id = component_feature.id;
+        ProFeatureDeleteOptions delete_option = PRO_FEAT_DELETE_NO_OPTS;
+        ProFeatureDelete(
+            (ProSolid)assembly_model,
+            &feature_id,
+            1,
+            &delete_option,
+            1);
+        ProSolidRegenerate((ProSolid)assembly_model, PRO_REGEN_NO_FLAGS);
+    }
+    if (connected)
+    {
+        disconnect_status = ProEngineerDisconnect(&process_handle, 10);
+        if (disconnect_status != PRO_TK_NO_ERROR && exit_code == 0)
+            exit_code = 3;
+    }
+done:
+    fclose(out);
+    return exit_code;
+}
+
+int wmain(int argc, wchar_t **argv)
+{
+    if (argc >= 3 && _wcsicmp(argv[2], L"--nested-mate") == 0)
+        return nested_named_mate_main(argc, argv);
+    if (argc >= 3 && _wcsicmp(argv[2], L"--add-unconstrained") == 0)
+        return add_unconstrained_main(argc, argv);
+    return standard_main(argc, argv);
 }

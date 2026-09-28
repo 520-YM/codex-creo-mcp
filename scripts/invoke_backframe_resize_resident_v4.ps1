@@ -5,8 +5,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $totalWatch = [Diagnostics.Stopwatch]::StartNew()
-$pipeName = 'creo_safe_flat_wall_v1'
+$pipeName = $null
 $tempPaths = [Collections.Generic.List[string]]::new()
+
+if ($env:CREO_INTERNAL_PIPE_NAME) {
+    $pipeName = $env:CREO_INTERNAL_PIPE_NAME -replace '^\\\\\.\\pipe\\', ''
+} else {
+    $creoProcesses = @(Get-Process -Name xtop -ErrorAction SilentlyContinue)
+    if ($creoProcesses.Count -ne 1) {
+        throw 'Exactly one Creo process is required when no internal pipe is supplied.'
+    }
+    $pipeName = 'codex_creo_internal_v11_' + $creoProcesses[0].Id
+}
 
 function Send-CreoPipe {
     param([string]$Message, [int]$ConnectTimeout = 1000)

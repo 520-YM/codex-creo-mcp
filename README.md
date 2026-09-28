@@ -1,8 +1,8 @@
 # Codex × Creo MCP
 
-这是一个面向 Windows 和 Creo Parametric 的 Codex MCP 集成项目。它通过 Node.js MCP 服务、Pro/TOOLKIT 原生桥接程序和可选的 Creo 常驻 DLL，让 Codex 能够读取与修改当前 Creo 会话。
+这是一个面向 Windows 和 Creo Parametric 的 Codex MCP 集成项目。它通过 Node.js MCP 服务和进程内 Pro/TOOLKIT DLL，让 Codex 能够读取与修改当前 Creo 会话。DLL 随 Creo 正常启动加载，每个 Creo 进程使用独立命名管道；全部模型命令均在 Creo 进程内部执行。
 
-当前版本提供 60 项正式 MCP 工具，覆盖模型读取、参数与尺寸、常用零件特征、装配、骨架、钣金、STEP 导出和版本清理。
+当前版本提供 67 项正式 MCP 工具，覆盖模型读取、参数与尺寸、常用零件特征、装配、骨架、钣金、质量、壁挂改型、STEP 导出和版本管理。
 
 ## 核心规则
 
@@ -17,9 +17,9 @@
 ```mermaid
 flowchart LR
     C[Codex Desktop] --> M[Node.js MCP Server]
-    M --> P[Named Pipe / Async Bridge]
-    P --> T[Creo Pro/TOOLKIT]
-    T --> R[Creo Parametric]
+    M --> P[Per-PID Named Pipe]
+    P --> D[In-process Pro/TOOLKIT DLL]
+    D --> R[Creo Parametric]
 ```
 
 详细说明见 [架构文档](docs/ARCHITECTURE.md)。
@@ -30,8 +30,9 @@ flowchart LR
 2. 安装 Node.js 20 或更高版本。
 3. 设置 `CREO_COMMON_FILES` 和 `VSDEVCMD`，运行 `build_all.cmd`。
 4. 运行 `install.ps1`，将 MCP 服务和编译产物安装到用户目录。
-5. 根据模板配置 Codex MCP 和 Creo Toolkit 注册文件。
-6. 重启 Codex 与 Creo 后进行只读握手测试。
+5. 根据模板配置 Codex MCP，并审查安装脚本生成的独立 `CreoSafeResident.dat`。
+6. 用户明确授权后，在目标电脑的 Creo 启动配置中独立注册该 DAT；不修改 WJT276。
+7. 正常启动 Creo、选择工作目录，再进行只读首条命令握手。
 
 完整步骤见 [Windows 安装教程](docs/INSTALL_WINDOWS.md)。
 
@@ -46,7 +47,13 @@ flowchart LR
 
 ## 重要警告
 
-Creo 的同步 Pro/TOOLKIT 调用可能清空原生撤销栈。启用持续轮询的常驻 DLL 前，请阅读 [撤销与常驻桥接](docs/UNDO_AND_RESIDENT.md)。
+内部 DLL 按具体 Creo PID 建立独立管道，并随该 Creo 进程退出。项目不需要专用 Creo 启动器。DLL 不使用高频 Toolkit 定时轮询，而是只在收到命令时通过 Creo 主线程消息执行，以降低对原生撤销栈的干扰。实际 `config.pro` 只在安装者显式传入 `-RegisterConfigProPath` 时备份并追加独立 DAT 注册行；WJT276 始终不修改。详见 [撤销与常驻桥接](docs/UNDO_AND_RESIDENT.md)。
+
+## 新电脑迁移
+
+仓库保存全部可公开迁移的源码、规则、测试、构建与安装脚本。目标电脑仍需自行安装合法的 Creo、匹配的 Pro/TOOLKIT SDK、Visual Studio C++ Build Tools、Node.js 和 Codex Desktop。公司 CAD 模型、WJT276、真实配置、PTC 二进制和私密 Excel/Word 原件不会进入公开仓库。
+
+完整迁移清单见 [新电脑迁移手册](docs/PORTABLE_MIGRATION.md)。设计流程见 [公司规则库](standards/README.md)。
 
 ## 第三方软件
 

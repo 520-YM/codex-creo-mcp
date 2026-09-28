@@ -1,6 +1,6 @@
 # MCP 工具清单
 
-正式工具数量：**60**。
+正式工具数量：**67**。
 
 所有工具均不得接收 `project_name` 或固定项目目录。涉及模型文件时，目录来源必须是当前 Creo 会话。
 
@@ -10,7 +10,7 @@
 
 ## 2. `creo_start_resident_and_get_basic_model`
 
-Creo 每次新会话的首次命令应先调用：启动或复用与当前 Creo 会话绑定的常驻桥接，并快速只读获取工作目录、当前模型名称、类型和外形尺寸；不遍历特征、尺寸、参数或装配组件。关闭该次 Creo 后桥接会自动退出。
+Creo 每次新会话的首次命令应先调用：绑定当前 Creo PID、启动时间和专属管道，读取当前工作目录、当前模型和外形尺寸，并尝试识别顶层装配、骨架、骨架外尺寸及关键特征摘要。全过程只读，不保存模型；关闭该次 Creo 后桥接自动退出。
 
 ## 3. `creo_verify_saved_copy`
 
@@ -58,7 +58,7 @@ Read-only list of standard dimensions for one Creo part stored under the live wo
 
 ## 14. `creo_get_mass_properties`
 
-Read computed mass properties for the current Creo part or a part copy in the safe output directory. Uses unit density for calculation only and does not modify the model.
+Read computed mass properties for the current Creo part or assembly, or a part/assembly file directly inside the current Creo working directory. Uses assigned Creo materials and densities and does not modify or save the model.
 
 ## 15. `creo_create_safe_thru_hole_copy`
 
@@ -228,18 +228,46 @@ Change the length and width dimensions of one verified skeleton box feature whil
 
 Modify one to eight driving dimensions of one named feature in the current expected Creo project part. Every change is guarded by dimension symbol, expected old value, feature ownership and relation status. The part is regenerated, all new values are read back, the active feature is verified, the model is saved, and older versions of only that model family are moved to the Windows Recycle Bin. Any failure before save restores every changed dimension.
 
-## 57. `creo_constrain_active_rectangle_symmetric_to_axes`
+## 57. `creo_rename_current_project_part`
+
+Rename the current active Creo part in the current Creo working directory. The active part name must exactly match expected_name, and the target model/file must not already exist. Regenerates, saves, and reads the new name back.
+
+## 58. `creo_create_project_gas_spring_variant`
+
+In the current Creo working directory, convert one loaded YQL gas-spring assembly to a new named variant in one guarded operation: rename the assembly and its unique YQLDOWN/YQLUP components, change both stroke extrusions, change the YQLUP compensation extrusion, change the YQLUP slider translation maximum, regenerate, save, read back, and keep the renamed top assembly active. The source assembly must be current and all expected old values must match.
+
+## 59. `creo_constrain_active_rectangle_symmetric_to_axes`
 
 While the expected Creo part or skeleton is actively editing a rectangular sketch, identify exactly two vertical and two horizontal rectangle lines by guarded dimensions, create X=0 and Y=0 construction centerlines when missing, add left/right symmetry about Y and bottom/top symmetry about X, verify both constraints by API readback, and update the active sketch without accepting, exiting, regenerating, or saving it.
 
-## 58. `creo_dimension_active_rectangle_four_side_insets`
+## 60. `creo_dimension_active_rectangle_four_side_insets`
 
 While the expected Creo model is actively editing a rectangular sketch, remove the two guarded overall rectangle dimensions and any automatic symmetry assumptions, project four specified model edges into the sketch, create four strong line-to-line inset dimensions with the requested value and outside placement, regenerate and verify the section, then update the active sketch without accepting, exiting, regenerating the solid, or saving.
 
-## 59. `creo_create_project_general_sketch`
+## 61. `creo_create_project_general_sketch`
 
 Create one independent sketched datum-curve feature in the current expected Creo project part. The sketch may contain 1-32 lines, circles, and arcs on a named datum plane with an explicit orientation plane. The tool rejects duplicate feature names and invalid or degenerate geometry, verifies every created section entity, regenerates the part, requires the solid volume to remain unchanged, saves the model, and moves older versions of only that model family to the Windows Recycle Bin. A failure before save deletes the partially created sketch.
 
-## 60. `creo_cleanup_project_versions`
+## 62. `creo_open_top_assembly`
+
+从当前 Creo 工作目录自动识别并打开顶层装配。优先选择名称含五个连续 0 的装配；没有时识别其他非气弹簧装配。随后识别对应骨架并读取基础信息。不会接收或更改工作目录。
+
+## 63. `creo_read_wall_mount_state`
+
+一次读取当前工作目录、顶层装配、骨架、装配组件、当前启用屏模型、质量及可获取的关键特征信息。只报告 API 实际读回结果，不修改或保存模型。
+
+## 64. `creo_convert_wall_mount_size`
+
+按照公司规则库生成横屏内贴玻璃户外壁挂的 14 步改型任务。先完成真实会话、顶层装配和骨架预检；只有具备经过验证的模型特征映射时才允许写入。缺少映射的步骤明确标记为未执行，绝不虚报成功。
+
+## 65. `creo_validate_wall_mount_conversion`
+
+只读验收当前横屏内贴玻璃户外壁挂：核对工作目录、顶层装配、骨架外尺寸、活动屏、14步映射覆盖率，以及风扇、过滤棉和两组气弹簧尚未完成的机械验证。任何无法由API证实的项目都明确列为阻塞，不修改或保存模型。
+
+## 66. `creo_regenerate_validate_save_top_assembly`
+
+校验当前活动模型与指定顶层装配名称完全一致，最多执行三次强制重新生成，读取全部顶层组件特征状态；只有重新生成和状态读取均成功时，才可按明确参数保存。默认不保存。不会更改工作目录、配置文件或插件。
+
+## 67. `creo_cleanup_project_versions`
 
 After a newly generated part has been verified, move every other .prt or .prt.<version> file in the current Creo working directory to the Windows Recycle Bin. The explicitly named keep file is never removed and unrelated files are untouched.

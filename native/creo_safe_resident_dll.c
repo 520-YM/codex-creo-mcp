@@ -18,11 +18,13 @@
 #include <ProArray.h>
 #include <ProUIDialog.h>
 
-#define PIPE_NAME L"\\\\.\\pipe\\creo_safe_flat_wall_v1"
+#define PIPE_NAME_CAPACITY 256
 #define MAX_REQUEST 4096
 #define MAX_RESPONSE 1024
 #define MAX_COMMAND_ARGS 32
 #define MAX_COMMAND_LINE 2048
+#define WM_CODEX_INTERNAL_REQUEST (WM_APP + 276)
+#define DISPATCH_CLASS_NAME L"CodexCreoInternalV11Dispatch"
 
 static volatile LONG resident_running = 0;
 static volatile LONG resident_request_pending = 0;
@@ -54,9 +56,14 @@ static void resident_startup_log(const wchar_t *stage, int status)
     CloseHandle(file);
 }
 static HANDLE resident_pipe_thread = NULL;
-static ProUITimerID resident_timer = NULL;
 static char resident_request[MAX_REQUEST];
 static char resident_response[MAX_RESPONSE];
+static wchar_t resident_pipe_name[PIPE_NAME_CAPACITY];
+static HWND resident_dispatch_window = NULL;
+static HINSTANCE resident_dispatch_instance = NULL;
+
+int codex_internal_command_file_execute(const wchar_t *command_path);
+static void resident_process_request(const char *request);
 
 static ProError resident_fake_connect(
     char *session_id, char *display, char *user, char *textpath,
@@ -84,6 +91,31 @@ static ProError resident_fake_disconnect(
     (void)process;
     (void)timeout;
     return PRO_TK_NO_ERROR;
+}
+
+ProError codex_internal_host_connect(
+    char *session, char *display, char *user, char *textpath,
+    ProBoolean allow_random, unsigned int timeout_sec,
+    ProBoolean *random_choice, ProProcessHandle *handle)
+{
+    return resident_fake_connect(
+        session, display, user, textpath, allow_random, timeout_sec,
+        random_choice, handle);
+}
+
+ProError codex_internal_host_disconnect(
+    ProProcessHandle *handle, unsigned int timeout_sec)
+{
+    return resident_fake_disconnect(handle, timeout_sec);
+}
+
+ProError codex_internal_host_connection_start(
+    char *proe_path, char *prodev_text_path, ProProcessHandle *handle)
+{
+    (void)proe_path;
+    (void)prodev_text_path;
+    (void)handle;
+    return PRO_TK_BAD_CONTEXT;
 }
 
 #define ProEngineerConnect resident_fake_connect
@@ -1247,6 +1279,8 @@ static int resident_pattern_set_execute(
     ProElemId type_path[1] = {PRO_E_GENPAT_TYPE};
     ProElemId count_path[2] = {
         PRO_E_GENPAT_DIM, PRO_E_GENPAT_DIM_FIRST_DIR_NUM_INST};
+    ProElemId direction_count_path[2] = {
+        PRO_E_GENPAT_DIR, PRO_E_GENPAT_DIM_FIRST_DIR_NUM_INST};
     ProElement type_element = NULL;
     int pattern_type = -1;
     int old_count = -1;
@@ -1417,16 +1451,25 @@ static int resident_pattern_set_execute(
     }
     status = resident_pattern_integer_element_get(
         tree, type_path, 1, &type_element, &pattern_type);
-    if (status != PRO_TK_NO_ERROR || pattern_type != PRO_GENPAT_DIM_DRIVEN)
+    if (status != PRO_TK_NO_ERROR)
     {
         exit_code = write_error(
             out, "pattern_type_guard",
-            status == PRO_TK_NO_ERROR ? PRO_TK_INVALID_TYPE : status);
+            status);
         goto done;
     }
     status = resident_pattern_integer_element_get(
         tree, count_path, 2, &count_element, &old_count);
-    if (status != PRO_TK_NO_ERROR || old_count != member_count_before)
+    if (status != PRO_TK_NO_ERROR)
+    {
+        count_path[0] = direction_count_path[0];
+        count_path[1] = direction_count_path[1];
+        status = resident_pattern_integer_element_get(
+            tree, count_path, 2, &count_element, &old_count);
+    }
+    if (status != PRO_TK_NO_ERROR ||
+        (old_count != member_count_before &&
+         old_count != member_count_before + 1))
     {
         exit_code = write_error(
             out, "pattern_count_guard",
@@ -1541,7 +1584,9 @@ static int resident_pattern_set_execute(
         status = ProPatternMembersGet(&pattern, &members);
     if (status == PRO_TK_NO_ERROR && members != NULL)
         status = ProArraySizeGet((ProArray)members, &member_count_after);
-    if (status != PRO_TK_NO_ERROR || member_count_after != new_count)
+    if (status != PRO_TK_NO_ERROR ||
+        (member_count_after != new_count &&
+         member_count_after + 1 != new_count))
     {
         exit_code = write_error(
             out, "pattern_count_readback",
@@ -1607,7 +1652,7 @@ static int resident_pattern_set_execute(
         "\"window_id\":%d,\"saved\":true}\n",
         pattern_feature_id, leader_feature_id,
         resolved_header_id, resolved_leader_id,
-        old_count, member_count_after, old_spacing, new_spacing,
+        old_count, new_count, old_spacing, new_spacing,
         verified_spacing, model_regen_status, top_regen_status, window_id);
     exit_code = 0;
     goto done;
@@ -1708,6 +1753,22 @@ static void resident_process_request(const char *request)
 {
     wchar_t path[2048];
     int exit_code;
+    if (strncmp(request, "EXECFILE|", 9) == 0)
+    {
+        if (!resident_utf8_to_wide(request + 9, path, 2048))
+        {
+            resident_set_response(
+                "{\"ok\":%s,\"persistent\":true,"
+                "\"internal_executor\":true,\"exit_code\":%d}\n", 2);
+            return;
+        }
+        exit_code = codex_internal_command_file_execute(path);
+        resident_set_response(
+            "{\"ok\":%s,\"persistent\":true,"
+            "\"internal_executor\":true,\"exit_code\":%d}\n",
+            exit_code);
+        return;
+    }
     if (strncmp(request, "BASIC|", 6) == 0)
     {
         if (!resident_utf8_to_wide(request + 6, path, 2048))
@@ -2105,25 +2166,27 @@ static void resident_process_request(const char *request)
         exit_code);
 }
 
-static void resident_timer_action(
-    char *dialog, ProUITimerID timer_id, ProAppData app_data)
+static LRESULT CALLBACK resident_dispatch_proc(
+    HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
     char request[MAX_REQUEST];
-    (void)dialog;
-    (void)timer_id;
-    (void)app_data;
-    request[0] = '\0';
-    if (InterlockedCompareExchange(&resident_request_pending, 0, 0) != 0)
+    (void)wparam;
+    (void)lparam;
+    if (message == WM_CODEX_INTERNAL_REQUEST)
     {
-        EnterCriticalSection(&resident_lock);
-        strcpy_s(request, sizeof(request), resident_request);
-        LeaveCriticalSection(&resident_lock);
+        request[0] = '\0';
+        if (InterlockedCompareExchange(
+                &resident_request_pending, 0, 0) != 0)
+        {
+            EnterCriticalSection(&resident_lock);
+            strcpy_s(request, sizeof(request), resident_request);
+            LeaveCriticalSection(&resident_lock);
+        }
+        if (request[0] != '\0')
+            resident_process_request(request);
+        return 0;
     }
-    if (request[0] != '\0')
-        resident_process_request(request);
-    if (InterlockedCompareExchange(&resident_running, 0, 0) != 0)
-        ProUIDialogTimerStart(
-            "CreoSafeResidentTimer", resident_timer, 100, PRO_B_FALSE);
+    return DefWindowProcW(window, message, wparam, lparam);
 }
 
 static DWORD WINAPI resident_pipe_main(LPVOID data)
@@ -2139,7 +2202,7 @@ static DWORD WINAPI resident_pipe_main(LPVOID data)
         DWORD wait_status;
 
         pipe = CreateNamedPipeW(
-            PIPE_NAME, PIPE_ACCESS_DUPLEX,
+            resident_pipe_name, PIPE_ACCESS_DUPLEX,
             PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
             1, 4096, 4096, 0, NULL);
         if (pipe == INVALID_HANDLE_VALUE)
@@ -2167,10 +2230,32 @@ static DWORD WINAPI resident_pipe_main(LPVOID data)
             request[--bytes_read] = '\0';
         if (strcmp(request, "PING") == 0)
         {
-            const char *ping =
+            char ping[512];
+            FILETIME created_at;
+            FILETIME exited_at;
+            FILETIME kernel_time;
+            FILETIME user_time;
+            ULARGE_INTEGER created_at_100ns;
+
+            created_at_100ns.QuadPart = 0;
+            if (GetProcessTimes(
+                    GetCurrentProcess(), &created_at, &exited_at,
+                    &kernel_time, &user_time))
+            {
+                created_at_100ns.LowPart = created_at.dwLowDateTime;
+                created_at_100ns.HighPart = created_at.dwHighDateTime;
+            }
+            sprintf_s(
+                ping, sizeof(ping),
                 "{\"ok\":true,\"persistent\":true,\"connected\":true,"
-                "\"session_bound\":true,\"transport\":\"dll\","
-                "\"health_code\":0}\n";
+                "\"session_bound\":true,\"transport\":\"in_process_dll\","
+                "\"protocol\":\"creo-safe-internal-v11\","
+                "\"target_creo_process_id\":%lu,"
+                "\"target_creo_start_time_100ns\":\"%I64u\","
+                "\"worker_process_id\":%lu,\"health_code\":0}\n",
+                (unsigned long)GetCurrentProcessId(),
+                created_at_100ns.QuadPart,
+                (unsigned long)GetCurrentProcessId());
             WriteFile(pipe, ping, (DWORD)strlen(ping), &written, NULL);
         }
         else
@@ -2181,22 +2266,40 @@ static DWORD WINAPI resident_pipe_main(LPVOID data)
             resident_response[0] = '\0';
             InterlockedExchange(&resident_request_pending, 1);
             LeaveCriticalSection(&resident_lock);
-            wait_status = WaitForSingleObject(resident_response_event, 120000);
-            if (wait_status == WAIT_OBJECT_0)
+            if (resident_dispatch_window == NULL ||
+                !PostMessageW(
+                    resident_dispatch_window,
+                    WM_CODEX_INTERNAL_REQUEST, 0, 0))
             {
-                EnterCriticalSection(&resident_lock);
+                const char *dispatch_error =
+                    "{\"ok\":false,\"persistent\":true,"
+                    "\"stage\":\"main_thread_dispatch_failed\"}\n";
+                InterlockedExchange(&resident_request_pending, 0);
                 WriteFile(
-                    pipe, resident_response,
-                    (DWORD)strlen(resident_response), &written, NULL);
-                LeaveCriticalSection(&resident_lock);
+                    pipe, dispatch_error,
+                    (DWORD)strlen(dispatch_error), &written, NULL);
             }
             else
             {
-                const char *timeout =
-                    "{\"ok\":false,\"persistent\":true,"
-                    "\"stage\":\"main_thread_timeout\"}\n";
-                WriteFile(
-                    pipe, timeout, (DWORD)strlen(timeout), &written, NULL);
+                wait_status = WaitForSingleObject(
+                    resident_response_event, 120000);
+                if (wait_status == WAIT_OBJECT_0)
+                {
+                    EnterCriticalSection(&resident_lock);
+                    WriteFile(
+                        pipe, resident_response,
+                        (DWORD)strlen(resident_response), &written, NULL);
+                    LeaveCriticalSection(&resident_lock);
+                }
+                else
+                {
+                    const char *timeout =
+                        "{\"ok\":false,\"persistent\":true,"
+                        "\"stage\":\"main_thread_timeout\"}\n";
+                    WriteFile(
+                        pipe, timeout,
+                        (DWORD)strlen(timeout), &written, NULL);
+                }
             }
         }
         FlushFileBuffers(pipe);
@@ -2209,14 +2312,19 @@ static DWORD WINAPI resident_pipe_main(LPVOID data)
 __declspec(dllexport) int user_initialize(
     int argc, char *argv[], char *version, char *build, wchar_t err_buffer[])
 {
-    ProName timer_name;
-    ProError status;
+    WNDCLASSW window_class;
+    ATOM class_atom;
     (void)argc;
     (void)argv;
     (void)version;
     (void)build;
 
     resident_startup_log(L"user_initialize_enter", 0);
+
+    swprintf_s(
+        resident_pipe_name, PIPE_NAME_CAPACITY,
+        L"\\\\.\\pipe\\codex_creo_internal_v11_%lu",
+        (unsigned long)GetCurrentProcessId());
 
     InitializeCriticalSection(&resident_lock);
     resident_stop_event = CreateEventW(NULL, TRUE, FALSE, NULL);
@@ -2227,42 +2335,41 @@ __declspec(dllexport) int user_initialize(
         resident_startup_log(L"event_setup", -1);
         return -1;
     }
-    InterlockedExchange(&resident_running, 1);
-    InterlockedExchange(&resident_request_pending, 0);
-    wcscpy_s(timer_name, sizeof(timer_name) / sizeof(timer_name[0]),
-             L"CreoSafeResidentTimer");
-    status = ProUITimerCreate(
-        resident_timer_action, NULL, timer_name, &resident_timer);
-    resident_startup_log(L"timer_create", status);
-    if (status != PRO_TK_NO_ERROR)
+    resident_dispatch_instance = GetModuleHandleW(NULL);
+    ZeroMemory(&window_class, sizeof(window_class));
+    window_class.lpfnWndProc = resident_dispatch_proc;
+    window_class.hInstance = resident_dispatch_instance;
+    window_class.lpszClassName = DISPATCH_CLASS_NAME;
+    class_atom = RegisterClassW(&window_class);
+    if (class_atom == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
     {
-        swprintf_s(
-            err_buffer, 80,
-            L"CreoSafeResident timer create failed: %d", status);
-        InterlockedExchange(&resident_running, 0);
+        wcscpy_s(err_buffer, 80, L"CreoSafeResident dispatch class failed");
+        resident_startup_log(L"dispatch_class", (int)GetLastError());
         return -1;
     }
+    resident_dispatch_window = CreateWindowExW(
+        0, DISPATCH_CLASS_NAME, L"Codex Creo Internal Dispatch",
+        0, 0, 0, 0, 0, HWND_MESSAGE, NULL,
+        resident_dispatch_instance, NULL);
+    if (resident_dispatch_window == NULL)
+    {
+        wcscpy_s(err_buffer, 80, L"CreoSafeResident dispatch window failed");
+        resident_startup_log(L"dispatch_window", (int)GetLastError());
+        UnregisterClassW(DISPATCH_CLASS_NAME, resident_dispatch_instance);
+        return -1;
+    }
+    InterlockedExchange(&resident_running, 1);
+    InterlockedExchange(&resident_request_pending, 0);
     resident_pipe_thread = CreateThread(
         NULL, 0, resident_pipe_main, NULL, 0, NULL);
     if (resident_pipe_thread == NULL)
     {
         wcscpy_s(err_buffer, 80, L"CreoSafeResident pipe thread failed");
         resident_startup_log(L"pipe_thread", -1);
-        ProUITimerDestroy(resident_timer);
-        resident_timer = NULL;
+        DestroyWindow(resident_dispatch_window);
+        resident_dispatch_window = NULL;
+        UnregisterClassW(DISPATCH_CLASS_NAME, resident_dispatch_instance);
         InterlockedExchange(&resident_running, 0);
-        return -1;
-    }
-    status = ProUIDialogTimerStart(
-        "CreoSafeResidentTimer", resident_timer, 100, PRO_B_FALSE);
-    resident_startup_log(L"timer_start", status);
-    if (status != PRO_TK_NO_ERROR)
-    {
-        swprintf_s(
-            err_buffer, 80,
-            L"CreoSafeResident timer start failed: %d", status);
-        InterlockedExchange(&resident_running, 0);
-        CancelSynchronousIo(resident_pipe_thread);
         return -1;
     }
     resident_startup_log(L"user_initialize_ok", 0);
@@ -2274,11 +2381,15 @@ __declspec(dllexport) void user_terminate(void)
     resident_startup_log(L"user_terminate", 0);
     InterlockedExchange(&resident_running, 0);
     SetEvent(resident_stop_event);
-    if (resident_timer != NULL)
+    if (resident_dispatch_window != NULL)
     {
-        ProUIDialogTimerStop(resident_timer);
-        ProUITimerDestroy(resident_timer);
-        resident_timer = NULL;
+        DestroyWindow(resident_dispatch_window);
+        resident_dispatch_window = NULL;
+    }
+    if (resident_dispatch_instance != NULL)
+    {
+        UnregisterClassW(DISPATCH_CLASS_NAME, resident_dispatch_instance);
+        resident_dispatch_instance = NULL;
     }
     if (resident_pipe_thread != NULL)
     {

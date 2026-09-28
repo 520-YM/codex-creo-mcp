@@ -22,6 +22,9 @@
 - [当前已知问题与研究重点](rules/08_当前已知问题与研究重点.md)
 - [气弹簧完整型号库](rules/09_气弹簧完整型号库.md)
 - [公司通用建模与项目规则](rules/10_公司通用建模与项目规则.md)
+- [Creo 会话首条命令流程](rules/11_会话首条命令流程.md)
+- [Creo 常用操作流程](rules/12_Creo常用操作流程.md)
+- [质量读取与力学计算范围](rules/13_质量读取与力学计算范围.md)
 - [资料来源清单](sources.md)
 
 ## 结构化数据
@@ -31,6 +34,7 @@
 - `data/gas_spring_design_rules.json`
 - `data/filter_cotton_rules.json`
 - `data/automation_policy.json`
+- `data/workflow_rules.json`
 
 ## 更新流程
 

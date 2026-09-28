@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "resident_protocol": "creo-safe-internal-v14",
+  "directory_policy": "current_creo_session_only",
+  "first_command": {
+    "required": true,
+    "readonly": true,
+    "steps": [
+      "bind_pid_start_time_and_dedicated_pipe",
+      "read_current_working_directory",
+      "read_current_model_identity_type_and_outline",
+      "identify_top_assembly_prefer_five_zero",
+      "identify_skeleton",
+      "read_skeleton_basic_dimensions_and_key_features",
+      "identify_active_screen_and_product_size",
+      "execute_original_user_command"
+    ],
+    "cache_lifetime": "current_creo_process",
+    "invalidate_on": ["creo_exit", "pid_change", "process_start_time_change", "pipe_failure"]
+  },
+  "wall_mount_conversion": {
+    "ordered_steps": [
+      "read_session_top_skeleton_and_key_features",
+      "resize_skeleton_outer_dimensions",
+      "switch_active_screen",
+      "set_wall_mount_round",
+      "resize_glass_and_optionally_rename",
+      "set_vesa_with_orientation_check",
+      "set_wall_mount_sketch_width_400_length_step_100",
+      "adapt_fan_count_spacing_and_symmetry",
+      "adapt_120mm_filter_grade_and_length",
+      "adapt_front_frame_gas_springs",
+      "adapt_screen_module_gas_springs",
+      "adapt_hinge_count_seed_and_spacing",
+      "regenerate_and_audit_top_assembly",
+      "validate_then_save"
+    ]
+  },
+  "gas_spring_required_checks": [
+    "model",
+    "moving_mass",
+    "center_of_mass_lever",
+    "gas_spring_lever",
+    "rear_bracket_position",
+    "front_or_screen_bracket_position",
+    "closed_compression_margin",
+    "maximum_open_angle",
+    "holding_torque",
+    "top_regenerate"
+  ],
+  "mechanical_targets": {
+    "front_frame_open_angle_deg": 50,
+    "front_frame_open_angle_tolerance_deg": 5,
+    "closed_compression_margin_mm": 10,
+    "screen_to_front_angle_difference_max_deg": 3,
+    "hinge_spacing_target_mm": 300,
+    "wall_mount_sketch_width_mm": 400,
+    "wall_mount_sketch_length_increment_mm": 100,
+    "filter_width_mm": 120
+  },
+  "mass_scopes": [
+    "complete_machine",
+    "front_frame_moving_system",
+    "screen_module_moving_system"
+  ],
+  "write_gate": {
+    "save_only_after_all_required_checks_pass": true,
+    "unknown_or_unverified_is_blocking": true,
+    "truthful_result_required": true
+  },
+  "prior_permission_required": [
+    "modify_config_pro",
+    "modify_or_disable_wjt276",
+    "screen_capture",
+    "mouse_or_keyboard_ui_automation",
+    "external_bridge",
+    "dedicated_creo_launcher",
+    "irreversible_delete",
+    "86inch_automatic_conversion"
+  ],
+  "forbidden_bindings": ["fixed_project_directory", "E:/project", "caller_supplied_project_root"],
+  "rollback": {
+    "backup_before_runtime_or_registration_change": true,
+    "stages": ["static_tests", "readonly_handshake", "no_save_runtime_test", "save_test"],
+    "keep_previous_resident_version": true
+  }
+}

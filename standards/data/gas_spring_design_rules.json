@@ -15,6 +15,11 @@
     "front_bracket_mm": 375,
     "rear_bracket_mm": 800,
     "measured_open_angle_deg": 46.25,
+    "current_mass_readback": {
+      "status": "incomplete",
+      "failed_components": ["ZHUANJIEBAN", "ZHUANJIEBAN"],
+      "note": "不得用不完整质量覆盖此前已验证的31.54kg"
+    },
     "closed_reserve_verified": false,
     "status": "trial_not_final"
   }

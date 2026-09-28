@@ -1,0 +1,218 @@
+{
+  "schema_version": 1,
+  "verified_on": "2026-09-28",
+  "product_family": "横屏壁挂内贴玻璃可改圆角",
+  "top_assembly": "M26Z0100000-V01",
+  "skeleton": "M26Z0100000-V01_SKEL",
+  "components": {
+    "skeleton": {"feature_id": 40, "model": "M26Z0100000-V01_SKEL"},
+    "back_frame": {"feature_id": 45, "model": "M26Z0141001-V01"},
+    "front_frame": {"feature_id": 1305, "model": "M26Z0141002-V01"},
+    "front_gas_springs": {
+      "feature_ids": [21490, 21497],
+      "model": "YQL600-255-22-10-210N",
+      "quantity": 2
+    },
+    "screen_assembly": {
+      "model": "M26Z0163001-V01",
+      "screen_models": ["43INCH", "49INCH", "55INCH", "65INCH", "75INCH", "86INCH"],
+      "verified_active_model": "65INCH",
+      "verified_active_feature_id": 164,
+      "placement_datums": ["屏横平面", "屏竖平面", "屏体平面"]
+    },
+    "screen_gas_springs": {
+      "assembly_model_name": "YQL-D_",
+      "feature_ids": [174, 175],
+      "quantity": 2
+    }
+  },
+  "skeleton_features": {
+    "outer_size": {"feature_id": 40, "feature_name": "后框", "length": "d3", "width": "d2", "height": "d1", "verified_values": [1660, 1113, 136]},
+    "wall_round": {"feature_id": 114469, "feature_name": "壁挂圆角", "radius": "d414", "verified_value": 0.5},
+    "rear_gas_spring_bracket": {"feature_id": 6918, "feature_name": "后盖气弹簧支架", "position": "d191", "verified_value": 800},
+    "front_gas_spring_bracket": {"feature_id": 121844, "feature_name": "前框气弹簧支架", "position": "d493", "verified_value": 375},
+    "screen_gas_spring_bracket": {"feature_id": 101924, "feature_name": "屏组件气弹簧支架", "candidate_dimensions": ["d403", "d404", "d405"], "verified_values": [15, 75, 515]},
+    "screen_gas_spring_hole": {"feature_id": 101968, "feature_name": "屏组件气弹簧支架孔", "candidate_dimensions": ["d407", "d408", "d409", "d456"], "verified_values": [5, 50, 6.4, 88]},
+    "hinge_seed": {"feature_id": 7437, "feature_name": "铰链孔", "zero_offset": "d460", "verified_value": 0},
+    "hinge_pattern": {"feature_id": 8242, "feature_name": "铰链阵列", "spacing": "d229", "verified_value": 280},
+    "filter_bracket_1": {"feature_id": 76074, "feature_name": "过滤棉支架1"},
+    "filter_bracket_2": {"feature_id": 76103, "feature_name": "过滤棉支架2"}
+  },
+  "part_features": {
+    "glass": {
+      "verified_model": "65GLASS",
+      "verified_file": "65glass.prt.47",
+      "outer_size": {
+        "feature_id": 326,
+        "feature_name": "玻璃外尺寸",
+        "dimension_1": "d23",
+        "dimension_2": "d24",
+        "verified_values": [853, 1478]
+      },
+      "inner_size": {
+        "feature_id": 353,
+        "feature_name": "玻璃内尺寸",
+        "dimension_1": "d27",
+        "dimension_2": "d28",
+        "verified_values": [803, 1428]
+      },
+      "rename_rule": "目标尺寸数字+glass；改名必须在尺寸修改成功并读回后执行"
+    },
+    "vesa": {
+      "model": "M26Z0181090-V01",
+      "verified_file": "m26z0181090-v01.prt.98",
+      "feature_id": 1584,
+      "feature_name": "VESA孔",
+      "dimension_1": "d89",
+      "dimension_2": "d90",
+      "verified_values": [440, 500],
+      "orientation_rule": "写入前必须按屏横/屏竖方向核验，禁止仅按数值大小推断长宽"
+    },
+    "wall_sketch": {
+      "model": "M26Z0181042-V01",
+      "verified_file": "m26z0181042-v01.prt.24",
+      "feature_id": 3777,
+      "feature_name": "壁挂草绘",
+      "fixed_width": {"dimension": "d163", "value": 400},
+      "length": {"dimension": "d164", "verified_value": 1400, "increment": 100}
+    }
+  },
+  "fan_layout": {
+    "outlet": {
+      "assembly": "M26Z0161002-V01",
+      "verified_file": "m26z0161002-v01.asm.66",
+      "fan_model": "120",
+      "mount_model": "2501-0001",
+      "active_fan_feature_ids": [51, 54, 55, 59, 60, 61],
+      "active_mount_feature_ids": [44, 49, 50, 56, 57, 58],
+      "verified_x_positions": [490, 294, 98, -98, -294, -490],
+      "verified_spacing": 196,
+      "verified_quantity": 6,
+      "symmetry_rule": "所有风扇中心位置必须关于装配X=0对称"
+    },
+    "inlet": {
+      "assembly": "M26Z0141001-V01",
+      "verified_file": "m26z0141001-v01.asm.106",
+      "fan_model": "80F-FAN",
+      "active_fan_feature_ids": [126, 129],
+      "verified_x_positions": [-770, -370],
+      "verified_quantity": 2,
+      "symmetry_readback": false,
+      "symmetry_rule": "改型后必须按整机中心X=0重新对称布置"
+    },
+    "excluded_from_normal_fan_count": [
+      {"model": "HEATER-80FAN", "feature_id": 123, "reason": "独立加热风扇"}
+    ],
+    "write_mapping_status": "pending_safe_single_instance_add_remove_and_reposition"
+  },
+  "filter_mapping": {
+    "host_model": "M26Z0181015-V01",
+    "verified_file": "m26z0181015-v01.prt.57",
+    "feature_id": 1341,
+    "feature_name": "过滤棉孔",
+    "filter_width": {"dimension": "d44", "verified_value": 120, "fixed_for_product_family": true},
+    "filter_length": {"dimension": "d45", "verified_value": 600},
+    "non_size_dimensions": [
+      {"dimension": "d43", "verified_value": 50},
+      {"dimension": "d46", "verified_value": 30},
+      {"dimension": "d47", "verified_value": 16}
+    ],
+    "current_material": {"material_code": "6.FIL600120110", "grade": "G4", "size_mm": [600, 120, 21]},
+    "library_file": "standards/data/filter_library.json",
+    "placeholder_model": "GUOLVMIAN",
+    "placeholder_parameterization_status": "no_verified_length_width_dimensions",
+    "write_mapping_status": "hole_dimensions_verified_material_selection_verified_placeholder_replacement_pending"
+  },
+  "front_gas_spring_mapping": {
+    "top_assembly": "M26Z0100000-V01",
+    "door_assembly": "M26Z0141002-V01",
+    "quantity": 2,
+    "current_model": "YQL600-255-22-10-210N",
+    "component_feature_ids": [21490, 21497],
+    "component_x_positions": [776, -776],
+    "symmetric": true,
+    "rated_force_each_n": 210,
+    "center_distance_mm": 600,
+    "stroke_mm": 255,
+    "rear_bracket": {"model": "M26Z0100000-V01_SKEL", "feature_id": 6918, "feature_name": "后盖气弹簧支架", "dimension": "d191", "verified_value": 800},
+    "front_bracket": {"model": "M26Z0100000-V01_SKEL", "feature_id": 121844, "feature_name": "前框气弹簧支架", "dimension": "d493", "verified_value": 375},
+    "open_state": {
+      "door_rotation_matrix_cosine": 0.6915175715997987,
+      "calculated_angle_deg": 46.2496,
+      "target_deg": 50,
+      "tolerance_deg": 5,
+      "within_target": true
+    },
+    "mass": {
+      "previous_verified_kg": 31.54,
+      "current_readback_status": "incomplete",
+      "current_failure_components": ["ZHUANJIEBAN", "ZHUANJIEBAN"]
+    },
+    "required_unverified_checks": ["关闭压缩余量约10mm", "当前完整质量复核", "力矩法撑起校核"],
+    "design_rule_file": "standards/data/gas_spring_design_rules.json",
+    "mapping_status": "geometry_and_model_verified_final_mechanical_validation_pending"
+  },
+  "screen_gas_spring_mapping": {
+    "screen_assembly": "M26Z0163001-V01",
+    "active_screen": {"model": "65INCH", "feature_id": 164, "knowledge_base_mass_kg": 20},
+    "quantity": 2,
+    "actual_model": "YQL300-110-18-8-220N",
+    "component_owner_assembly": "M26Z0141001-V01",
+    "component_feature_ids": [96, 99],
+    "component_x_positions": [742, -742],
+    "symmetric": true,
+    "rated_force_each_n": 220,
+    "center_distance_mm": 300,
+    "stroke_mm": 110,
+    "mechanism_placeholders": {"assembly": "M26Z0163001-V01", "model": "YQL-D_", "feature_ids": [174, 175]},
+    "primary_bracket": {
+      "model": "M26Z0100000-V01_SKEL",
+      "feature_id": 101924,
+      "feature_name": "屏组件气弹簧支架",
+      "candidate_dimensions": ["d403", "d404", "d405"],
+      "verified_values": [15, 75, 515],
+      "primary_position_dimension": "d405"
+    },
+    "secondary_hole_position": {
+      "model": "M26Z0181090-V01",
+      "feature_id": 1187,
+      "feature_name": "屏组件气弹簧支架孔位",
+      "candidate_dimensions": ["d69", "d70", "d71", "d72"],
+      "verified_values": [50, 175, 8, 6.4],
+      "primary_position_dimension": "d70",
+      "adjust_only_if_primary_bracket_is_insufficient": true
+    },
+    "angle_rule": {"max_difference_from_front_deg": 3},
+    "current_pose_validation": {
+      "status": "not_comparable",
+      "reason": "屏组件当前为闭合/固定姿态，前框当前为46.25度打开姿态"
+    },
+    "mass": {
+      "screen_body_from_knowledge_base_kg": 20,
+      "current_assembly_readback_status": "incomplete",
+      "current_failure_components": ["65INCH"],
+      "note": "20kg只代表屏本体，不代表整个M26Z0163001-V01组件"
+    },
+    "required_unverified_checks": ["屏组件完整质量", "最大开启角度", "与前框同状态角度差", "关闭压缩余量", "力矩法撑起校核"],
+    "mapping_status": "model_and_bracket_geometry_verified_final_mechanical_validation_pending"
+  },
+  "final_validation": {
+    "tool": "creo_validate_wall_mount_conversion",
+    "readonly_checks": ["顶层装配与骨架可读", "骨架外尺寸", "活动屏唯一且正确", "顶层质量完整读回", "14步映射覆盖率"],
+    "regenerate_status": "verified_v14_standard_fallback_status_0_one_attempt_component_audit_passed",
+    "save_status": "pending_explicit_write_execution_after_all_checks_pass",
+    "latest_runtime_result": {
+      "target_size": "65",
+      "passed_checks": ["顶层装配与骨架可读", "骨架外尺寸1660x1113", "唯一活动屏65INCH", "顶层重新生成与组件状态审计"],
+      "blocked_checks": ["顶层质量完整读回：549个叶子实例中162个质量计算失败", "前框气弹簧关闭压缩余量和力矩校核", "屏组件气弹簧完整质量、同状态角度差和力矩校核"],
+      "acceptance_passed": false,
+      "saved": false
+    },
+    "truth_rule": "任何API未证实项目必须列为阻塞，禁止报告验收通过"
+  },
+  "mapping_status": {
+    "steps_verified": [1, 2, 3, 4, 5, 6, 7, 12, 13],
+    "steps_partially_verified": [8, 9, 10, 11, 14],
+    "steps_pending": [8, 9, 10, 11, 14]
+  }
+}

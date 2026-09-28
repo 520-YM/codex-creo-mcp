@@ -4,15 +4,36 @@
 #include <string.h>
 #include <tlhelp32.h>
 #include <wchar.h>
+#include <wincrypt.h>
 
 #include <ProToolkit.h>
 #include <ProCore.h>
 #include <ProUtil.h>
+#include "codex_external_host.h"
+
+int codex_external_command_file_execute(const wchar_t *command_path);
+int codex_external_special_can_handle(const char *request);
+int codex_external_special_execute(
+    const char *request, char *response, size_t response_capacity);
+
+#ifndef PROCESS_QUERY_LIMITED_INFORMATION
+#define PROCESS_QUERY_LIMITED_INFORMATION 0x1000
+#endif
 
 static ProProcessHandle persistent_process;
 static int persistent_connected = 0;
 static int persistent_spawned_by_creo = 0;
+static int persistent_registry_managed = 0;
+static const char *persistent_registry_startup = "creo_spawn";
 static volatile LONG persistent_session_lost = 0;
+static DWORD persistent_target_process_id = 0;
+static HANDLE persistent_target_process = NULL;
+static ULONGLONG persistent_target_start_time = 0;
+static wchar_t persistent_pipe_name[256];
+static wchar_t persistent_mutex_name[256];
+static wchar_t persistent_registry_path[MAX_PATH];
+static char persistent_session_nonce[65];
+static char persistent_session_fingerprint[33];
 
 int user_initialize(int argc, char *argv[])
 {
@@ -59,6 +80,22 @@ static ProError persistent_engineer_disconnect(
     return persistent_connected ? PRO_TK_NO_ERROR : PRO_TK_COMM_ERROR;
 }
 
+ProError codex_host_connect(
+    char *session, char *display, char *user, char *textpath,
+    ProBoolean allow_random, unsigned int timeout_sec,
+    ProBoolean *random_choice, ProProcessHandle *handle)
+{
+    return persistent_engineer_connect(
+        session, display, user, textpath, allow_random, timeout_sec,
+        random_choice, handle);
+}
+
+ProError codex_host_disconnect(
+    ProProcessHandle *handle, unsigned int timeout_sec)
+{
+    return persistent_engineer_disconnect(handle, timeout_sec);
+}
+
 #define ProEngineerConnect persistent_engineer_connect
 #define ProEngineerDisconnect persistent_engineer_disconnect
 #define wmain flat_wall_command_wmain
@@ -67,11 +104,470 @@ static ProError persistent_engineer_disconnect(
 #undef ProEngineerDisconnect
 #undef ProEngineerConnect
 
-#define PIPE_NAME L"\\\\.\\pipe\\creo_safe_flat_wall_v1"
-#define MUTEX_NAME L"Local\\CreoSafeFlatWallPersistentV1"
 #define MAX_COMMAND_ARGS 32
 #define MAX_COMMAND_LINE 2048
 #define WATCHDOG_INTERVAL_MS 1000
+
+typedef struct persistent_feature_context
+{
+    FILE *out;
+    int count;
+} PersistentFeatureContext;
+
+static const char *persistent_feature_type_name(ProFeattype type)
+{
+    switch (type)
+    {
+        case PRO_FEAT_PROTRUSION: return "protrusion";
+        case PRO_FEAT_CUT: return "cut";
+        case PRO_FEAT_HOLE: return "hole";
+        case PRO_FEAT_ROUND: return "round";
+        case PRO_FEAT_CHAMFER: return "chamfer";
+        case PRO_FEAT_SHELL: return "shell";
+        case PRO_FEAT_DATUM: return "datum";
+        case PRO_FEAT_DATUM_SURF: return "datum_surface";
+        case PRO_FEAT_DATUM_AXIS: return "datum_axis";
+        case PRO_FEAT_DATUM_POINT: return "datum_point";
+        case PRO_FEAT_CSYS: return "coordinate_system";
+        case PRO_FEAT_ZONE: return "zone";
+        default: return "other";
+    }
+}
+
+static const char *persistent_feature_status_name(ProFeatStatus status)
+{
+    switch (status)
+    {
+        case PRO_FEAT_ACTIVE: return "active";
+        case PRO_FEAT_INACTIVE: return "inactive";
+        case PRO_FEAT_FAMTAB_SUPPRESSED: return "family_table_suppressed";
+        case PRO_FEAT_SIMP_REP_SUPPRESSED: return "simplified_rep_suppressed";
+        case PRO_FEAT_PROG_SUPPRESSED: return "program_suppressed";
+        case PRO_FEAT_SUPPRESSED: return "suppressed";
+        case PRO_FEAT_UNREGENERATED: return "unregenerated";
+        default: return "invalid";
+    }
+}
+
+static void persistent_write_id_array(FILE *out, int *ids, int count)
+{
+    int index;
+    fputc('[', out);
+    for (index = 0; index < count; ++index)
+    {
+        if (index > 0)
+            fputc(',', out);
+        fprintf(out, "%d", ids[index]);
+    }
+    fputc(']', out);
+}
+
+static ProError persistent_feature_visit(
+    ProFeature *feature, ProError filter_status, ProAppData app_data)
+{
+    PersistentFeatureContext *context =
+        (PersistentFeatureContext *)app_data;
+    ProName name = L"";
+    ProFeattype type = -1;
+    ProFeatStatus status = PRO_FEAT_INVALID;
+    ProBoolean visible = PRO_B_FALSE;
+    int *parents = NULL;
+    int *children = NULL;
+    int parent_count = 0;
+    int child_count = 0;
+    ProError name_status;
+    ProError type_status;
+    ProError feature_status;
+    ProError visible_status;
+    ProError parents_status;
+    ProError children_status;
+
+    (void)filter_status;
+    name_status = ProModelitemNameGet((ProModelitem *)feature, name);
+    type_status = ProFeatureTypeGet(feature, &type);
+    feature_status = ProFeatureStatusGet(feature, &status);
+    visible_status = ProFeatureVisibilityGet(feature, &visible);
+    parents_status = ProFeatureParentsGet(feature, &parents, &parent_count);
+    children_status = ProFeatureChildrenGet(feature, &children, &child_count);
+    if (context->count > 0)
+        fputc(',', context->out);
+    fprintf(context->out, "{\"id\":%d,\"name\":", feature->id);
+    if (name_status == PRO_TK_NO_ERROR)
+        json_wide(context->out, name);
+    else
+        fputs("null", context->out);
+    fprintf(context->out,
+        ",\"type\":\"%s\",\"type_code\":%d,"
+        "\"status\":\"%s\",\"status_code\":%d,\"visible\":%s,"
+        "\"parent_ids\":",
+        type_status == PRO_TK_NO_ERROR ?
+            persistent_feature_type_name(type) : "other",
+        type_status == PRO_TK_NO_ERROR ? (int)type : -1,
+        feature_status == PRO_TK_NO_ERROR ?
+            persistent_feature_status_name(status) : "invalid",
+        feature_status == PRO_TK_NO_ERROR ? (int)status : -1,
+        visible_status == PRO_TK_NO_ERROR && visible == PRO_B_TRUE ?
+            "true" : "false");
+    persistent_write_id_array(
+        context->out, parents,
+        parents_status == PRO_TK_NO_ERROR ? parent_count : 0);
+    fputs(",\"child_ids\":", context->out);
+    persistent_write_id_array(
+        context->out, children,
+        children_status == PRO_TK_NO_ERROR ? child_count : 0);
+    fputc('}', context->out);
+    if (parents != NULL)
+        ProArrayFree((ProArray *)&parents);
+    if (children != NULL)
+        ProArrayFree((ProArray *)&children);
+    ++context->count;
+    return PRO_TK_NO_ERROR;
+}
+
+static int persistent_feature_snapshot(const wchar_t *output_path)
+{
+    FILE *out = NULL;
+    ProMdl model = NULL;
+    ProMdlName model_name;
+    ProMdlType model_type;
+    ProError status;
+    PersistentFeatureContext context;
+
+    if (_wfopen_s(&out, output_path, L"wb") != 0 || out == NULL)
+        return 2;
+    status = ProMdlCurrentGet(&model);
+    if (status != PRO_TK_NO_ERROR)
+    {
+        fprintf(out,
+            "{\"ok\":false,\"readonly\":true,\"stage\":\"current_model\","
+            "\"error_code\":%d}\n", status);
+        fclose(out);
+        return 1;
+    }
+    status = ProMdlNameGet(model, model_name);
+    if (status != PRO_TK_NO_ERROR)
+    {
+        fprintf(out,
+            "{\"ok\":false,\"readonly\":true,\"stage\":\"model_name\","
+            "\"error_code\":%d}\n", status);
+        fclose(out);
+        return 1;
+    }
+    status = ProMdlTypeGet(model, &model_type);
+    if (status != PRO_TK_NO_ERROR || model_type != PRO_MDL_PART)
+    {
+        fprintf(out,
+            "{\"ok\":false,\"readonly\":true,"
+            "\"stage\":\"model_type_guard\",\"error_code\":%d}\n",
+            status == PRO_TK_NO_ERROR ? PRO_TK_INVALID_TYPE : status);
+        fclose(out);
+        return 1;
+    }
+    fputs("{\"ok\":true,\"readonly\":true,\"persistent\":true,"
+          "\"model\":", out);
+    json_wide(out, model_name);
+    fputs(",\"features\":[", out);
+    context.out = out;
+    context.count = 0;
+    status = ProSolidFeatVisit(
+        (ProSolid)model, persistent_feature_visit, NULL,
+        (ProAppData)&context);
+    fprintf(out,
+        "],\"feature_count\":%d,\"visit_status\":%d}\n",
+        context.count, status);
+    fclose(out);
+    return status == PRO_TK_NO_ERROR || status == PRO_TK_E_NOT_FOUND ? 0 : 1;
+}
+
+static int persistent_hex_token_valid(
+    const char *value, size_t expected_length)
+{
+    size_t index;
+    if (value == NULL || strlen(value) != expected_length)
+        return 0;
+    for (index = 0; index < expected_length; ++index)
+    {
+        char current = value[index];
+        if (!((current >= '0' && current <= '9') ||
+              (current >= 'a' && current <= 'f') ||
+              (current >= 'A' && current <= 'F')))
+            return 0;
+    }
+    return 1;
+}
+
+static int persistent_environment_read(char *session_id, size_t session_count)
+{
+    char target_process[32];
+    char *end = NULL;
+    unsigned long parsed_process;
+    DWORD length;
+
+    length = GetEnvironmentVariableA(
+        "CREO_CONNECT_ID", session_id, (DWORD)session_count);
+    if (length == 0 || length >= session_count)
+        return 0;
+    length = GetEnvironmentVariableA(
+        "CREO_TARGET_PROCESS_ID", target_process,
+        (DWORD)sizeof(target_process));
+    if (length == 0 || length >= sizeof(target_process))
+        return 0;
+    parsed_process = strtoul(target_process, &end, 10);
+    if (end == target_process || *end != '\0' || parsed_process == 0 ||
+        parsed_process > MAXDWORD)
+        return 0;
+    persistent_target_process_id = (DWORD)parsed_process;
+
+    length = GetEnvironmentVariableA(
+        "CREO_SESSION_NONCE", persistent_session_nonce,
+        (DWORD)sizeof(persistent_session_nonce));
+    if (length == 0 || length >= sizeof(persistent_session_nonce) ||
+        !persistent_hex_token_valid(persistent_session_nonce, 64))
+        return 0;
+    length = GetEnvironmentVariableA(
+        "CREO_SESSION_FINGERPRINT", persistent_session_fingerprint,
+        (DWORD)sizeof(persistent_session_fingerprint));
+    if (length == 0 || length >= sizeof(persistent_session_fingerprint) ||
+        !persistent_hex_token_valid(persistent_session_fingerprint, 32))
+        return 0;
+
+    length = GetEnvironmentVariableW(
+        L"CREO_RESIDENT_PIPE", persistent_pipe_name,
+        (DWORD)(sizeof(persistent_pipe_name) / sizeof(persistent_pipe_name[0])));
+    if (length == 0 ||
+        length >= sizeof(persistent_pipe_name) / sizeof(persistent_pipe_name[0]) ||
+        wcsncmp(persistent_pipe_name, L"\\\\.\\pipe\\codex_creo_", 20) != 0)
+        return 0;
+    length = GetEnvironmentVariableW(
+        L"CREO_RESIDENT_MUTEX", persistent_mutex_name,
+        (DWORD)(sizeof(persistent_mutex_name) / sizeof(persistent_mutex_name[0])));
+    if (length == 0 ||
+        length >= sizeof(persistent_mutex_name) / sizeof(persistent_mutex_name[0]) ||
+        wcsncmp(persistent_mutex_name, L"Local\\CodexCreoResident_", 24) != 0)
+        return 0;
+    return 1;
+}
+
+static void persistent_target_process_open(void)
+{
+    FILETIME created;
+    FILETIME exited;
+    FILETIME kernel;
+    FILETIME user;
+    ULARGE_INTEGER converted;
+
+    persistent_target_process = OpenProcess(
+        SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+        FALSE, persistent_target_process_id);
+    if (persistent_target_process == NULL)
+        persistent_target_process = OpenProcess(
+            SYNCHRONIZE | PROCESS_QUERY_INFORMATION,
+            FALSE, persistent_target_process_id);
+    if (persistent_target_process == NULL)
+        return;
+    if (GetProcessTimes(
+            persistent_target_process, &created, &exited, &kernel, &user))
+    {
+        converted.LowPart = created.dwLowDateTime;
+        converted.HighPart = created.dwHighDateTime;
+        persistent_target_start_time = converted.QuadPart;
+    }
+}
+
+static DWORD persistent_creo_ancestor_process_id(void)
+{
+    HANDLE snapshot;
+    DWORD current = GetCurrentProcessId();
+    DWORD fallback = 0;
+    int depth;
+
+    snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE)
+        return 0;
+    for (depth = 0; depth < 12; ++depth)
+    {
+        PROCESSENTRY32W entry;
+        int found = 0;
+        memset(&entry, 0, sizeof(entry));
+        entry.dwSize = sizeof(entry);
+        if (Process32FirstW(snapshot, &entry))
+        {
+            do
+            {
+                if (entry.th32ProcessID == current)
+                {
+                    current = entry.th32ParentProcessID;
+                    if (fallback == 0)
+                        fallback = current;
+                    found = 1;
+                    break;
+                }
+            } while (Process32NextW(snapshot, &entry));
+        }
+        if (!found || current == 0)
+            break;
+        memset(&entry, 0, sizeof(entry));
+        entry.dwSize = sizeof(entry);
+        if (Process32FirstW(snapshot, &entry))
+        {
+            do
+            {
+                if (entry.th32ProcessID == current)
+                {
+                    if (_wcsicmp(entry.szExeFile, L"xtop.exe") == 0)
+                    {
+                        CloseHandle(snapshot);
+                        return current;
+                    }
+                    break;
+                }
+            } while (Process32NextW(snapshot, &entry));
+        }
+    }
+    CloseHandle(snapshot);
+    return fallback;
+}
+
+static int persistent_random_identity_create(void)
+{
+    HCRYPTPROV provider = 0;
+    BYTE random_bytes[32];
+    size_t index;
+    if (!CryptAcquireContextW(
+            &provider, NULL, NULL, PROV_RSA_FULL,
+            CRYPT_VERIFYCONTEXT | CRYPT_SILENT))
+        return 0;
+    if (!CryptGenRandom(provider, (DWORD)sizeof(random_bytes), random_bytes))
+    {
+        CryptReleaseContext(provider, 0);
+        return 0;
+    }
+    CryptReleaseContext(provider, 0);
+    for (index = 0; index < sizeof(random_bytes); ++index)
+    {
+        sprintf_s(
+            persistent_session_nonce + index * 2,
+            sizeof(persistent_session_nonce) - index * 2,
+            "%02x", random_bytes[index]);
+    }
+    memcpy(
+        persistent_session_fingerprint,
+        persistent_session_nonce,
+        sizeof(persistent_session_fingerprint) - 1);
+    persistent_session_fingerprint[
+        sizeof(persistent_session_fingerprint) - 1] = '\0';
+    return 1;
+}
+
+static int persistent_identity_prepare_for_process(DWORD process_id)
+{
+    wchar_t temp_path[MAX_PATH];
+    DWORD temp_length;
+
+    persistent_target_process_id = process_id;
+    if (persistent_target_process_id == 0 ||
+        !persistent_random_identity_create())
+        return 0;
+    persistent_target_process_open();
+    swprintf_s(
+        persistent_pipe_name,
+        sizeof(persistent_pipe_name) / sizeof(persistent_pipe_name[0]),
+        L"\\\\.\\pipe\\codex_creo_spawn_%lu_%.24S",
+        (unsigned long)persistent_target_process_id,
+        persistent_session_fingerprint);
+    swprintf_s(
+        persistent_mutex_name,
+        sizeof(persistent_mutex_name) / sizeof(persistent_mutex_name[0]),
+        L"Local\\CodexCreoSpawnResident_%lu",
+        (unsigned long)persistent_target_process_id);
+    temp_length = GetTempPathW(
+        (DWORD)(sizeof(temp_path) / sizeof(temp_path[0])), temp_path);
+    if (temp_length == 0 ||
+        temp_length >= sizeof(temp_path) / sizeof(temp_path[0]))
+        return 0;
+    swprintf_s(
+        persistent_registry_path,
+        sizeof(persistent_registry_path) / sizeof(persistent_registry_path[0]),
+        L"%scodex-creo-resident-%lu.json",
+        temp_path, (unsigned long)persistent_target_process_id);
+    return 1;
+}
+
+static int persistent_spawn_identity_prepare(void)
+{
+    return persistent_identity_prepare_for_process(
+        persistent_creo_ancestor_process_id());
+}
+
+static DWORD persistent_single_creo_process_id(void)
+{
+    HANDLE snapshot;
+    PROCESSENTRY32W entry;
+    DWORD process_id = 0;
+    int match_count = 0;
+
+    snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE)
+        return 0;
+    memset(&entry, 0, sizeof(entry));
+    entry.dwSize = sizeof(entry);
+    if (Process32FirstW(snapshot, &entry))
+    {
+        do
+        {
+            if (_wcsicmp(entry.szExeFile, L"xtop.exe") == 0)
+            {
+                process_id = entry.th32ProcessID;
+                ++match_count;
+            }
+        } while (Process32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+    return match_count == 1 ? process_id : 0;
+}
+
+static DWORD persistent_wait_for_single_creo_process_id(DWORD timeout_ms)
+{
+    DWORD started_at = GetTickCount();
+    DWORD process_id;
+    do
+    {
+        process_id = persistent_single_creo_process_id();
+        if (process_id != 0)
+            return process_id;
+        Sleep(100);
+    } while (GetTickCount() - started_at < timeout_ms);
+    return 0;
+}
+
+static int persistent_spawn_registry_write(void)
+{
+    FILE *out = NULL;
+    if (_wfopen_s(&out, persistent_registry_path, L"wb") != 0 || out == NULL)
+        return 0;
+    fprintf(out,
+        "{\"protocol\":\"codex-creo-session-v2\","
+        "\"startup\":\"%s\",\"pipe_name\":",
+        persistent_registry_startup);
+    json_wide(out, persistent_pipe_name);
+    fprintf(out,
+        ",\"target_creo_process_id\":%lu,"
+        "\"worker_process_id\":%lu,"
+        "\"session_nonce\":\"%s\","
+        "\"session_fingerprint\":\"%s\",",
+        (unsigned long)persistent_target_process_id,
+        (unsigned long)GetCurrentProcessId(),
+        persistent_session_nonce,
+        persistent_session_fingerprint);
+    if (persistent_target_start_time != 0)
+        fprintf(out,
+            "\"target_creo_start_time_100ns\":\"%I64u\"}\n",
+            persistent_target_start_time);
+    else
+        fputs("\"target_creo_start_time_100ns\":null}\n", out);
+    fclose(out);
+    return 1;
+}
 
 static int persistent_session_lost_status(ProError status)
 {
@@ -87,6 +583,12 @@ static ProError persistent_health_check(void)
 static int persistent_session_is_alive(void)
 {
     ProError health = persistent_health_check();
+    if (persistent_target_process != NULL &&
+        WaitForSingleObject(persistent_target_process, 0) == WAIT_OBJECT_0)
+    {
+        InterlockedExchange(&persistent_session_lost, 1);
+        return 0;
+    }
     if (persistent_session_lost_status(health))
     {
         InterlockedExchange(&persistent_session_lost, 1);
@@ -266,6 +768,22 @@ static int utf8_to_wide(const char *source, wchar_t *target, size_t target_count
         CP_UTF8, MB_ERR_INVALID_CHARS, source, -1,
         target, (int)target_count);
     return converted > 0;
+}
+
+static char *persistent_authenticated_command(char *request)
+{
+    char *nonce;
+    char *separator;
+    if (request == NULL || strncmp(request, "AUTH|", 5) != 0)
+        return NULL;
+    nonce = request + 5;
+    separator = strchr(nonce, '|');
+    if (separator == NULL)
+        return NULL;
+    *separator = '\0';
+    if (strcmp(nonce, persistent_session_nonce) != 0)
+        return NULL;
+    return separator + 1;
 }
 
 static int command_file_execute(const wchar_t *command_path)
@@ -655,14 +1173,20 @@ int wmain(int argc, wchar_t **wide_arguments)
     char display[256];
     char user[256];
     char textpath[2];
+    char start_command[4096];
     DWORD display_length;
     DWORD user_length;
+    DWORD start_command_length;
     int running = 1;
+    int spawn_request =
+        argc > 1 && _wcsicmp(wide_arguments[1], L"-rpc") == 0;
+    int launcher_request;
 
     memset(session_id, 0, sizeof(session_id));
     memset(display, 0, sizeof(display));
     memset(user, 0, sizeof(user));
     memset(textpath, 0, sizeof(textpath));
+    memset(start_command, 0, sizeof(start_command));
     display_length = GetEnvironmentVariableA(
         "CREO_CONNECT_DISPLAY", display, (DWORD)sizeof(display));
     user_length = GetEnvironmentVariableA(
@@ -671,8 +1195,66 @@ int wmain(int argc, wchar_t **wide_arguments)
         display[0] = '\0';
     if (user_length == 0 || user_length >= sizeof(user))
         user[0] = '\0';
+    start_command_length = GetEnvironmentVariableA(
+        "CREO_START_COMMAND", start_command, (DWORD)sizeof(start_command));
+    launcher_request =
+        start_command_length > 0 && start_command_length < sizeof(start_command);
 
-    single_instance = CreateMutexW(NULL, TRUE, MUTEX_NAME);
+    if (spawn_request)
+    {
+        char **arguments = persistent_wide_arguments_to_ansi(
+            argc, wide_arguments);
+        if (arguments == NULL)
+            return 5;
+        status = ProAsynchronousMain(argc, arguments);
+        persistent_arguments_free(argc, arguments);
+        if (status != PRO_TK_NO_ERROR)
+            return 4;
+        persistent_spawned_by_creo = 1;
+        persistent_registry_managed = 1;
+        if (!persistent_spawn_identity_prepare())
+            return 6;
+    }
+    else if (launcher_request)
+    {
+        DWORD launched_process_id;
+        if (persistent_single_creo_process_id() != 0)
+        {
+            persistent_startup_status_write(
+                "creo_already_running", PRO_TK_E_IN_USE);
+            return 8;
+        }
+        status = ProEngineerConnectionStart(
+            start_command, textpath, &persistent_process);
+        if (status != PRO_TK_NO_ERROR)
+        {
+            persistent_startup_status_write("start_creo", status);
+            return 4;
+        }
+        launched_process_id = persistent_wait_for_single_creo_process_id(30000);
+        if (launched_process_id == 0 ||
+            !persistent_identity_prepare_for_process(launched_process_id))
+        {
+            persistent_startup_status_write(
+                "started_creo_identity", PRO_TK_E_NOT_FOUND);
+            ProEngineerDisconnect(&persistent_process, 1);
+            return 6;
+        }
+        persistent_registry_managed = 1;
+        persistent_registry_startup = "bridge_starts_creo";
+    }
+    else
+    {
+        if (!persistent_environment_read(session_id, sizeof(session_id)))
+        {
+            persistent_startup_status_write(
+                "session_environment", PRO_TK_BAD_INPUTS);
+            return 6;
+        }
+        persistent_target_process_open();
+    }
+
+    single_instance = CreateMutexW(NULL, TRUE, persistent_mutex_name);
     if (single_instance == NULL || GetLastError() == ERROR_ALREADY_EXISTS)
     {
         persistent_startup_status_write("single_instance", PRO_TK_E_IN_USE);
@@ -681,26 +1263,11 @@ int wmain(int argc, wchar_t **wide_arguments)
         return 3;
     }
 
-    if (argc > 1 && _wcsicmp(wide_arguments[1], L"-rpc") == 0)
-    {
-        char **arguments = persistent_wide_arguments_to_ansi(
-            argc, wide_arguments);
-        if (arguments == NULL)
-        {
-            persistent_startup_status_write(
-                "spawn_arguments", PRO_TK_OUT_OF_MEMORY);
-            ReleaseMutex(single_instance);
-            CloseHandle(single_instance);
-            return 5;
-        }
-        status = ProAsynchronousMain(argc, arguments);
-        persistent_arguments_free(argc, arguments);
-        persistent_spawned_by_creo = status == PRO_TK_NO_ERROR;
-    }
-    else
+    if (!spawn_request && !launcher_request)
     {
         status = ProEngineerConnect(
-            session_id, NULL, NULL, textpath, PRO_B_TRUE, 20,
+            session_id, display, user, textpath, PRO_B_FALSE,
+            persistent_connect_timeout_seconds(),
             &random_choice, &persistent_process);
     }
     if (status != PRO_TK_NO_ERROR)
@@ -713,6 +1280,15 @@ int wmain(int argc, wchar_t **wide_arguments)
     }
     persistent_connected = 1;
     persistent_startup_status_write("connected", PRO_TK_NO_ERROR);
+    if (persistent_registry_managed && !persistent_spawn_registry_write())
+    {
+        persistent_cleanup_own_comm_helpers();
+        if (persistent_target_process != NULL)
+            CloseHandle(persistent_target_process);
+        ReleaseMutex(single_instance);
+        CloseHandle(single_instance);
+        return 7;
+    }
 
     while (running &&
            InterlockedCompareExchange(
@@ -724,7 +1300,7 @@ int wmain(int argc, wchar_t **wide_arguments)
         DWORD bytes_read = 0;
 
         pipe = CreateNamedPipeW(
-            PIPE_NAME,
+            persistent_pipe_name,
             PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
             PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
             1,
@@ -751,47 +1327,86 @@ int wmain(int argc, wchar_t **wide_arguments)
         }
         else
         {
+            char *command_request;
             wchar_t command_path[2048];
             request[bytes_read] = '\0';
             while (bytes_read > 0 &&
                    (request[bytes_read - 1] == '\r' ||
                     request[bytes_read - 1] == '\n'))
                 request[--bytes_read] = '\0';
-            if (strcmp(request, "PING") == 0)
+            command_request = persistent_authenticated_command(request);
+            if (command_request == NULL)
+            {
+                pipe_reply(pipe,
+                    "{\"ok\":false,\"stage\":\"session_authentication\"}\n");
+            }
+            else if (strcmp(command_request, "PING") == 0)
             {
                 ProError health = persistent_health_check();
-                char response[192];
-                sprintf_s(
-                    response, sizeof(response),
-                    "{\"ok\":%s,\"persistent\":true,\"connected\":%s,"
-                    "\"session_bound\":true,\"health_code\":%d}\n",
-                    health == PRO_TK_NO_ERROR ? "true" : "false",
-                    health == PRO_TK_NO_ERROR ? "true" : "false",
-                    health);
+                char response[640];
+                if (persistent_target_start_time != 0)
+                {
+                    sprintf_s(
+                        response, sizeof(response),
+                        "{\"ok\":%s,\"persistent\":true,\"connected\":%s,"
+                        "\"session_bound\":true,\"health_code\":%d,"
+                        "\"target_creo_process_id\":%lu,"
+                        "\"target_creo_start_time_100ns\":\"%I64u\","
+                        "\"worker_process_id\":%lu,"
+                        "\"session_nonce\":\"%s\","
+                        "\"session_fingerprint\":\"%s\"}\n",
+                        health == PRO_TK_NO_ERROR ? "true" : "false",
+                        health == PRO_TK_NO_ERROR ? "true" : "false",
+                        health,
+                        (unsigned long)persistent_target_process_id,
+                        persistent_target_start_time,
+                        (unsigned long)GetCurrentProcessId(),
+                        persistent_session_nonce,
+                        persistent_session_fingerprint);
+                }
+                else
+                {
+                    sprintf_s(
+                        response, sizeof(response),
+                        "{\"ok\":%s,\"persistent\":true,\"connected\":%s,"
+                        "\"session_bound\":true,\"health_code\":%d,"
+                        "\"target_creo_process_id\":%lu,"
+                        "\"target_creo_start_time_100ns\":null,"
+                        "\"worker_process_id\":%lu,"
+                        "\"session_nonce\":\"%s\","
+                        "\"session_fingerprint\":\"%s\"}\n",
+                        health == PRO_TK_NO_ERROR ? "true" : "false",
+                        health == PRO_TK_NO_ERROR ? "true" : "false",
+                        health,
+                        (unsigned long)persistent_target_process_id,
+                        (unsigned long)GetCurrentProcessId(),
+                        persistent_session_nonce,
+                        persistent_session_fingerprint);
+                }
                 pipe_reply(pipe, response);
             }
-            else if (strcmp(request, "RECONNECT") == 0)
+            else if (strcmp(command_request, "RECONNECT") == 0)
             {
                 pipe_reply(pipe,
                     "{\"ok\":false,\"persistent\":true,"
                     "\"session_bound\":true,"
                     "\"stage\":\"reconnect_disabled\"}\n");
             }
-            else if (strcmp(request, "SHUTDOWN") == 0)
+            else if (strcmp(command_request, "SHUTDOWN") == 0)
             {
                 pipe_reply(pipe,
                     "{\"ok\":true,\"persistent\":true,\"shutdown\":true}\n");
                 running = 0;
             }
-            else if (strcmp(request, "SESSION_LOST") == 0)
+            else if (strcmp(command_request, "SESSION_LOST") == 0)
             {
                 running = 0;
                 InterlockedExchange(&persistent_session_lost, 1);
             }
-            else if (strncmp(request, "BASIC|", 6) == 0)
+            else if (strncmp(command_request, "BASIC|", 6) == 0)
             {
                 if (!utf8_to_wide(
-                        request + 6, command_path,
+                        command_request + 6, command_path,
                         sizeof(command_path) / sizeof(command_path[0])))
                 {
                     pipe_reply(pipe,
@@ -809,9 +1424,30 @@ int wmain(int argc, wchar_t **wide_arguments)
                     pipe_reply(pipe, response);
                 }
             }
-            else if (strncmp(request, "DISPLAY|", 8) == 0)
+            else if (strncmp(command_request, "FEATURES|", 9) == 0)
             {
-                char *result_utf8 = request + 8;
+                if (!utf8_to_wide(
+                        command_request + 9, command_path,
+                        sizeof(command_path) / sizeof(command_path[0])))
+                {
+                    pipe_reply(pipe,
+                        "{\"ok\":false,\"stage\":\"features_path_utf8\"}\n");
+                }
+                else
+                {
+                    int exit_code = persistent_feature_snapshot(command_path);
+                    char response[128];
+                    sprintf_s(
+                        response, sizeof(response),
+                        "{\"ok\":%s,\"persistent\":true,"
+                        "\"feature_snapshot\":true,\"exit_code\":%d}\n",
+                        exit_code == 0 ? "true" : "false", exit_code);
+                    pipe_reply(pipe, response);
+                }
+            }
+            else if (strncmp(command_request, "DISPLAY|", 8) == 0)
+            {
+                char *result_utf8 = command_request + 8;
                 char *model_utf8 = strchr(result_utf8, '|');
                 char *expected_utf8 = NULL;
                 wchar_t result_path[2048];
@@ -848,8 +1484,39 @@ int wmain(int argc, wchar_t **wide_arguments)
                     pipe_reply(pipe, response);
                 }
             }
+            else if (strncmp(command_request, "EXECFILE|", 9) == 0)
+            {
+                if (!utf8_to_wide(
+                        command_request + 9, command_path,
+                        sizeof(command_path) / sizeof(command_path[0])))
+                {
+                    pipe_reply(pipe,
+                        "{\"ok\":false,\"stage\":\"execfile_path_utf8\"}\n");
+                }
+                else
+                {
+                    int exit_code = codex_external_command_file_execute(command_path);
+                    char response[160];
+                    sprintf_s(
+                        response, sizeof(response),
+                        "{\"ok\":%s,\"persistent\":true,"
+                        "\"external_command\":true,\"exit_code\":%d}\n",
+                        exit_code == 0 ? "true" : "false", exit_code);
+                    pipe_reply(pipe, response);
+                }
+            }
+            else if (codex_external_special_can_handle(command_request))
+            {
+                char response[1024] = {0};
+                if (!codex_external_special_execute(
+                        command_request, response, sizeof(response)))
+                    pipe_reply(pipe,
+                        "{\"ok\":false,\"stage\":\"special_command\"}\n");
+                else
+                    pipe_reply(pipe, response);
+            }
             else if (!utf8_to_wide(
-                         request, command_path,
+                         command_request, command_path,
                          sizeof(command_path) / sizeof(command_path[0])))
             {
                 pipe_reply(pipe,
@@ -877,6 +1544,13 @@ int wmain(int argc, wchar_t **wide_arguments)
         persistent_connected = 0;
     }
     persistent_cleanup_own_comm_helpers();
+    if (persistent_registry_managed && persistent_registry_path[0] != L'\0')
+        DeleteFileW(persistent_registry_path);
+    if (persistent_target_process != NULL)
+    {
+        CloseHandle(persistent_target_process);
+        persistent_target_process = NULL;
+    }
     ReleaseMutex(single_instance);
     CloseHandle(single_instance);
     return 0;

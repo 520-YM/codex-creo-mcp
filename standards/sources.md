@@ -2,12 +2,12 @@
 
 ## 已整理为公开规则
 
-- `E:\project\知识库\华宇模组屏信息.xlsx`
-- `E:\project\知识库\过滤棉.xlsx`
-- `E:\project\气弹簧计算\气弹簧.xlsx`
-- `E:\project\气弹簧计算\气弹簧选型.doc`
-- `E:\project\知识库\MWE户外设计标准V1.3-20260814.doc`
-- `C:\Users\Marvel\Documents\Codex\2026-08-04\ru\公司设计规则库.docx`
+- `<PRIVATE_KNOWLEDGE_ROOT>\华宇模组屏信息.xlsx`
+- `<PRIVATE_KNOWLEDGE_ROOT>\过滤棉.xlsx`
+- `<PRIVATE_KNOWLEDGE_ROOT>\气弹簧.xlsx`
+- `<PRIVATE_KNOWLEDGE_ROOT>\气弹簧选型.doc`
+- `<PRIVATE_KNOWLEDGE_ROOT>\MWE户外设计标准V1.3-20260814.doc`
+- `<PRIVATE_KNOWLEDGE_ROOT>\公司设计规则库.docx`
 - 本任务历史中经用户明确确认的 Creo 操作规则。
 
 ## 私密原件保存策略
@@ -19,5 +19,5 @@
 
 ## 尚缺资料
 
-- `Z:\001-结构资料\结构图纸编码.doc` 尚未纳入本库。
+- 公司结构图纸编码原件尚未纳入本库。
 - 86 寸产品按用户要求暂不进入自动改型范围。

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "verified_on": "2026-09-28",
+  "source": "E:/project/知识库/过滤棉.xlsx",
+  "product_scope": "横屏内贴玻璃户外壁挂",
+  "required_width_mm": 120,
+  "grades_must_be_distinguished": ["G4", "F6"],
+  "eligible_models": [
+    {"material_code": "6.FIL420120112", "grade": "G4", "length_mm": 420, "width_mm": 120, "thickness_mm": 21},
+    {"material_code": "6.FIL5001200107", "grade": "G4", "length_mm": 500, "width_mm": 120, "thickness_mm": 21},
+    {"material_code": "6.FIL600120110", "grade": "G4", "length_mm": 600, "width_mm": 120, "thickness_mm": 21},
+    {"material_code": "6.FIL700120111", "grade": "G4", "length_mm": 700, "width_mm": 120, "thickness_mm": 21}
+  ],
+  "availability_note": "当前型号库没有宽度120mm的F6型号；若要求F6，不得自动用G4替代。"
+}

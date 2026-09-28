@@ -47,13 +47,24 @@ $env:VSDEVCMD = 'C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common
 %USERPROFILE%\.codex\mcp\creo_safe
 ```
 
-## 6. 创建 Creo Toolkit 注册文件
+## 6. 内部连接加载方式
 
-复制 `config\creotk.dat.example` 到安装目录并将 `<INSTALL_ROOT>` 替换为实际路径。
+项目不使用专用 Creo 启动器。`install.ps1` 会生成独立的 `CreoSafeResident.dat`，其内容仅注册 v14 驻留 DLL，不包含 WJT276。
 
-然后审查 `config\config.pro.example`。只有在获得配置文件所有者明确许可后，才把相应行加入实际 `config.pro`。不要覆盖完整配置文件。
+默认安装命令不修改 `config.pro`。审查 DAT 后，可由用户手动注册，或者显式授权安装脚本进行最小修改：
 
-如果电脑上有 WJT276，应保留其原注册段，将 CreoSafeResident 作为另一个独立注册段加入同一个 `.dat` 文件；不要修改或重新分发 WJT276 文件。
+```powershell
+.\install.ps1 -SkipBuild -RegisterConfigProPath 'C:\你的Creo配置目录\config.pro'
+```
+
+只有显式提供该参数时，脚本才会：
+
+1. 读取指定的 `config.pro`。
+2. 创建带时间戳的同目录备份。
+3. 仅追加一条指向独立 `CreoSafeResident.dat` 的 `protkdat` 行。
+4. 不修改已有选项、不替换现有插件注册、不修改 WJT276。
+
+随后按原来的方式正常启动 Creo，无需任何专用启动器。
 
 ## 7. 配置 Codex MCP
 
@@ -71,15 +82,18 @@ $env:VSDEVCMD = 'C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common
 ## 8. 首次测试
 
 1. 重启 Codex。
-2. 启动 Creo 并选择工作目录。
-3. 执行只读命令“读取当前模型”。
+2. 正常启动 Creo，并选择工作目录。
+3. 执行任意第一条业务命令；系统先自动完成只读会话、顶层装配和骨架基本信息握手。
 4. 确认返回的 `working_directory` 与 Creo 中选择的目录一致。
 5. 再用测试模型执行写入工具。
 
-## 9. 卸载
+## 9. 迁移完整性检查
+
+运行 `npm run check`，确认67项工具、当前工作目录策略、内部会话绑定和14步壁挂流程测试通过。再检查返回协议为 `creo-safe-internal-v14`。
+
+## 10. 卸载
 
 1. 从 Codex 配置中移除或禁用 `mcp_servers.creo_safe`。
-2. 经配置文件所有者同意后，从 Creo 注册文件中移除 CreoSafeResident 段。
-3. 删除安装目录。
+2. 删除安装目录。
 
 卸载操作不应删除任何 Creo 项目模型。

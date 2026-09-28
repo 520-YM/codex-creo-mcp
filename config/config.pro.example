@@ -1,4 +1,3 @@
-! Review before adding these lines to the active Creo config.pro.
-protkdat <INSTALL_ROOT>\creotk.dat
-open_protk_unsigned_apps always
-max_undo 5
+! Review this exact one-line registration before changing the active config.pro.
+! Keep WJT276 in its own existing DAT; do not merge or replace its registration.
+protkdat <INSTALL_ROOT>\CreoSafeResident.dat
