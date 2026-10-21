@@ -2,7 +2,7 @@
 
 这是一个面向 Windows 和 Creo Parametric 的 Codex MCP 集成项目。它通过 Node.js MCP 服务和进程内 Pro/TOOLKIT DLL，让 Codex 能够读取与修改当前 Creo 会话。DLL 随 Creo 正常启动加载，每个 Creo 进程使用独立命名管道；全部模型命令均在 Creo 进程内部执行。
 
-当前版本提供 67 项正式 MCP 工具，覆盖模型读取、参数与尺寸、常用零件特征、装配、骨架、钣金、质量、壁挂改型、STEP 导出和版本管理。
+当前版本提供 69 项正式 MCP 工具，覆盖模型读取、参数与尺寸、常用零件特征、装配、骨架、钣金、质量、壁挂改型、STEP 导出和版本管理。
 
 ## 核心规则
 
@@ -53,7 +53,7 @@ flowchart LR
 
 仓库保存全部可公开迁移的源码、规则、测试、构建与安装脚本。目标电脑仍需自行安装合法的 Creo、匹配的 Pro/TOOLKIT SDK、Visual Studio C++ Build Tools、Node.js 和 Codex Desktop。公司 CAD 模型、WJT276、真实配置、PTC 二进制和私密 Excel/Word 原件不会进入公开仓库。
 
-完整迁移清单见 [新电脑迁移手册](docs/PORTABLE_MIGRATION.md)。设计流程见 [公司规则库](standards/README.md)。
+完整迁移清单见 [新电脑迁移手册](docs/PORTABLE_MIGRATION.md)。设计流程见 [公司规则库](standards/README.md)。新电脑上的 Codex 从 [AGENTS.md](AGENTS.md) 开始，可直接读取脱敏后的对话提炼知识和执行规则。
 
 ## 第三方软件
 
