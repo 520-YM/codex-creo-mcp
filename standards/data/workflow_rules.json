@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "resident_protocol": "creo-safe-internal-v14",
+  "resident_protocol": "creo-safe-internal-v16",
   "directory_policy": "current_creo_session_only",
   "first_command": {
     "required": true,
@@ -16,7 +16,12 @@
       "execute_original_user_command"
     ],
     "cache_lifetime": "current_creo_process",
-    "invalidate_on": ["creo_exit", "pid_change", "process_start_time_change", "pipe_failure"]
+    "invalidate_on": [
+      "creo_exit",
+      "pid_change",
+      "process_start_time_change",
+      "pipe_failure"
+    ]
   },
   "wall_mount_conversion": {
     "ordered_steps": [
@@ -78,10 +83,31 @@
     "irreversible_delete",
     "86inch_automatic_conversion"
   ],
-  "forbidden_bindings": ["fixed_project_directory", "E:/project", "caller_supplied_project_root"],
+  "forbidden_bindings": [
+    "fixed_project_directory",
+    "E:/project",
+    "caller_supplied_project_root"
+  ],
   "rollback": {
     "backup_before_runtime_or_registration_change": true,
-    "stages": ["static_tests", "readonly_handshake", "no_save_runtime_test", "save_test"],
+    "stages": [
+      "static_tests",
+      "readonly_handshake",
+      "no_save_runtime_test",
+      "save_test"
+    ],
     "keep_previous_resident_version": true
-  }
+  },
+  "runtime_snapshot": {
+    "date": "2026-10-21",
+    "formal_mcp_tool_count": 69,
+    "tool_count_rule": "enumerate actual runtime"
+  },
+  "knowledge_bootstrap": [
+    "AGENTS.md",
+    "standards/README.md",
+    "standards/data/workflow_rules.json",
+    "standards/data/automation_policy.json",
+    "standards/data/conversation_knowledge.json"
+  ]
 }
