@@ -56,6 +56,7 @@ int wmain(int argc, wchar_t **argv)
     ProError user_status = PRO_TK_GENERAL_ERROR;
     int already_loaded = 0;
     int start_mode = 0;
+    int random_connect = 0;
     const wchar_t *result_path;
     const wchar_t *dll_argument;
     const wchar_t *text_dir_argument;
@@ -90,7 +91,9 @@ int wmain(int argc, wchar_t **argv)
     }
     else
     {
-        if (!wide_to_ansi(argv[2], connect_id, sizeof(connect_id)) ||
+        random_connect = wcscmp(argv[2], L"--random") == 0;
+        if ((!random_connect &&
+             !wide_to_ansi(argv[2], connect_id, sizeof(connect_id))) ||
             !wide_to_ansi(argv[3], display, sizeof(display)) ||
             !wide_to_ansi(argv[4], user, sizeof(user)) ||
             !wide_to_ansi(argv[5], textpath, sizeof(textpath)))
@@ -100,8 +103,12 @@ int wmain(int argc, wchar_t **argv)
             return 2;
         }
         connect_status = ProEngineerConnect(
-            connect_id, display, user, textpath, PRO_B_FALSE, 8,
-            &random_choice, &process);
+            random_connect ? "" : connect_id,
+            random_connect ? "" : display,
+            random_connect ? "" : user,
+            random_connect ? "" : textpath,
+            random_connect ? PRO_B_TRUE : PRO_B_FALSE,
+            8, &random_choice, &process);
     }
     if (connect_status != PRO_TK_NO_ERROR)
     {

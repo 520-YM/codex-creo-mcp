@@ -19,7 +19,11 @@ if (args.some((value) => /[\r\n]/.test(value))) {
 const runtimeDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'creo-direct-'));
 const resultPath = path.join(runtimeDirectory, 'result.json');
 const commandPath = path.join(runtimeDirectory, 'command.txt');
-const pipeName = `\\\\.\\pipe\\codex_creo_internal_v11_${processId}`;
+const version = process.env.CREO_INTERNAL_VERSION || 'v11';
+if (!/^v[0-9]+$/.test(version)) {
+  throw new Error('CREO_INTERNAL_VERSION must look like v11.');
+}
+const pipeName = `\\\\.\\pipe\\codex_creo_internal_${version}_${processId}`;
 const started = process.hrtime.bigint();
 let descriptor;
 

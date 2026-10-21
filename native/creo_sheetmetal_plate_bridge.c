@@ -647,6 +647,7 @@ static ProError create_unattached_wall(
     double length,
     double width,
     double thickness,
+    int include_first_wall_thickness,
     ProFeature *created_profile,
     ProFeature *created_feature,
     int *profile_created,
@@ -706,8 +707,19 @@ static ProError create_unattached_wall(
     RUN_STAGE("direction",
         add_integer_element(
             feature_tree, PRO_E_STD_DIRECTION, PRO_EXT_CR_IN_SIDE_TWO));
-    RUN_STAGE("sheetmetal_thickness",
-        add_double_element(feature_tree, PRO_E_STD_SMT_THICKNESS, thickness));
+    /*
+       PRO_E_STD_SMT_THICKNESS is legal only while creating the very first
+       wall before the part owns a sheet-metal thickness dimension.  Deleting
+       the last wall does not necessarily remove that model-level dimension.
+       Supplying the element again in that state is explicitly unsupported by
+       Creo TOOLKIT and Creo 10 can terminate instead of returning ProError.
+    */
+    if (include_first_wall_thickness)
+    {
+        RUN_STAGE("sheetmetal_thickness",
+            add_double_element(
+                feature_tree, PRO_E_STD_SMT_THICKNESS, thickness));
+    }
     RUN_STAGE("sheetmetal_swap_driving_side",
         add_integer_element(
             feature_tree, PRO_E_STD_SMT_SWAP_DRV_SIDE, PRO_B_FALSE));
@@ -798,6 +810,226 @@ cleanup:
     return status;
 }
 
+#ifdef CODEX_INTERNAL_COMMAND_BUILD
+/*
+   ProFeatureSketchedWithOptionsCreate is stable from an asynchronous
+   TOOLKIT executable, but Creo 10 raises a non-continuable exception when
+   the same client wrapper is called from an in-process resident DLL.  Build
+   the wall as an incomplete feature, fill its own section, then redefine it.
+   These are the same in-process-safe calls already used by
+   create_profile_sketch().
+*/
+static ProError create_unattached_wall_in_process(
+    ProMdl model,
+    const wchar_t *feature_name,
+    double length,
+    double width,
+    double thickness,
+    int include_first_wall_thickness,
+    ProFeature *created_feature,
+    int *creation_error_count,
+    const char **failure_stage)
+{
+    ProError status = PRO_TK_NO_ERROR;
+    ProElement feature_tree = NULL;
+    ProElement standard_section = NULL;
+    ProElement setup_plane = NULL;
+    ProElement extracted_tree = NULL;
+    ProElement sketch_element = NULL;
+    ProElemId sketch_path_ids[2] = {PRO_E_STD_SECTION, PRO_E_SKETCHER};
+    ProModelitem front_item;
+    ProModelitem top_item;
+    ProModelitem model_item;
+    ProSelection front_selection = NULL;
+    ProSelection top_selection = NULL;
+    ProSelection model_selection = NULL;
+    ProReference front_reference = NULL;
+    ProReference top_reference = NULL;
+    ProSection section = NULL;
+    ProFeatureCreateOptions *options = NULL;
+    ProErrorlist errors = {NULL, 0};
+    int incomplete_feature_created = 0;
+
+#define RUN_IN_PROCESS_STAGE(label, expression) \
+    do { \
+        *failure_stage = label; \
+        trace_stage_write(label); \
+        status = (expression); \
+        if (status != PRO_TK_NO_ERROR) goto cleanup; \
+    } while (0)
+
+    created_feature->id = -1;
+    *creation_error_count = 0;
+    RUN_IN_PROCESS_STAGE("wall_front_plane_lookup",
+        ProModelitemByNameInit(model, PRO_SURFACE, L"FRONT", &front_item));
+    RUN_IN_PROCESS_STAGE("wall_top_plane_lookup",
+        ProModelitemByNameInit(model, PRO_SURFACE, L"TOP", &top_item));
+    RUN_IN_PROCESS_STAGE("wall_front_plane_selection",
+        ProSelectionAlloc(NULL, &front_item, &front_selection));
+    RUN_IN_PROCESS_STAGE("wall_top_plane_selection",
+        ProSelectionAlloc(NULL, &top_item, &top_selection));
+    RUN_IN_PROCESS_STAGE("wall_front_plane_reference",
+        ProSelectionToReference(front_selection, &front_reference));
+    RUN_IN_PROCESS_STAGE("wall_top_plane_reference",
+        ProSelectionToReference(top_selection, &top_reference));
+    RUN_IN_PROCESS_STAGE("wall_feature_tree_alloc",
+        ProElementAlloc(PRO_E_FEATURE_TREE, &feature_tree));
+    RUN_IN_PROCESS_STAGE("wall_feature_type",
+        add_integer_element(
+            feature_tree, PRO_E_FEATURE_TYPE, PRO_FEAT_DATUM_SURF));
+    RUN_IN_PROCESS_STAGE("wall_feature_form",
+        add_integer_element(feature_tree, PRO_E_FEATURE_FORM, PRO_FLAT));
+    RUN_IN_PROCESS_STAGE("wall_feature_name",
+        add_wstring_element(
+            feature_tree, PRO_E_STD_FEATURE_NAME, feature_name));
+    RUN_IN_PROCESS_STAGE("wall_standard_section",
+        add_compound_element(
+            feature_tree, PRO_E_STD_SECTION, &standard_section));
+    RUN_IN_PROCESS_STAGE("wall_setup_plane",
+        add_compound_element(
+            standard_section, PRO_E_STD_SEC_SETUP_PLANE, &setup_plane));
+    RUN_IN_PROCESS_STAGE("wall_section_plane",
+        add_reference_element(
+            setup_plane, PRO_E_STD_SEC_PLANE, front_reference));
+    RUN_IN_PROCESS_STAGE("wall_section_view_direction",
+        add_integer_element(
+            setup_plane,
+            PRO_E_STD_SEC_PLANE_VIEW_DIR,
+            PRO_SEC_VIEW_DIR_SIDE_ONE));
+    RUN_IN_PROCESS_STAGE("wall_section_orientation_direction",
+        add_integer_element(
+            setup_plane,
+            PRO_E_STD_SEC_PLANE_ORIENT_DIR,
+            PRO_SEC_ORIENT_DIR_UP));
+    RUN_IN_PROCESS_STAGE("wall_section_orientation_reference",
+        add_reference_element(
+            setup_plane,
+            PRO_E_STD_SEC_PLANE_ORIENT_REF,
+            top_reference));
+    RUN_IN_PROCESS_STAGE("wall_is_unattached",
+        add_integer_element(
+            feature_tree, PRO_E_IS_UNATTACHED_WALL, PRO_B_TRUE));
+    RUN_IN_PROCESS_STAGE("wall_direction",
+        add_integer_element(
+            feature_tree, PRO_E_STD_DIRECTION, PRO_EXT_CR_IN_SIDE_TWO));
+    if (include_first_wall_thickness)
+    {
+        RUN_IN_PROCESS_STAGE("wall_sheetmetal_thickness",
+            add_double_element(
+                feature_tree, PRO_E_STD_SMT_THICKNESS, thickness));
+    }
+    RUN_IN_PROCESS_STAGE("wall_sheetmetal_swap_driving_side",
+        add_integer_element(
+            feature_tree, PRO_E_STD_SMT_SWAP_DRV_SIDE, PRO_B_FALSE));
+    RUN_IN_PROCESS_STAGE("wall_model_item",
+        ProMdlToModelitem(model, &model_item));
+    RUN_IN_PROCESS_STAGE("wall_model_selection",
+        ProSelectionAlloc(NULL, &model_item, &model_selection));
+    RUN_IN_PROCESS_STAGE("wall_incomplete_options_alloc",
+        ProArrayAlloc(
+            1,
+            sizeof(ProFeatureCreateOptions),
+            1,
+            (ProArray *)&options));
+    options[0] = PRO_FEAT_CR_INCOMPLETE_FEAT;
+    *failure_stage = "wall_incomplete_feature_create";
+    trace_stage_write(*failure_stage);
+    status = ProFeatureWithoptionsCreate(
+        model_selection,
+        feature_tree,
+        options,
+        PRO_REGEN_NO_FLAGS,
+        created_feature,
+        &errors);
+    *creation_error_count = errors.error_number;
+    trace_errorlist_write(*failure_stage, status, &errors);
+    if (status != PRO_TK_NO_ERROR)
+        goto cleanup;
+    incomplete_feature_created = 1;
+    ProArrayFree((ProArray *)&options);
+    options = NULL;
+    if (errors.error_list != NULL)
+    {
+        ProArrayFree((ProArray *)&errors.error_list);
+        errors.error_list = NULL;
+        errors.error_number = 0;
+    }
+    RUN_IN_PROCESS_STAGE("wall_feature_tree_extract",
+        ProFeatureElemtreeExtract(
+            created_feature,
+            NULL,
+            PRO_FEAT_EXTRACT_NO_OPTS,
+            &extracted_tree));
+    RUN_IN_PROCESS_STAGE("wall_sketch_element_get",
+        element_by_ids_get(
+            extracted_tree, sketch_path_ids, 2, &sketch_element));
+    RUN_IN_PROCESS_STAGE("wall_section_handle_get",
+        ProElementSpecialvalueGet(
+            sketch_element, NULL, (ProAppData *)&section));
+    RUN_IN_PROCESS_STAGE("wall_closed_rectangle_build",
+        closed_rectangle_section_build(
+            section, length, width, failure_stage));
+    RUN_IN_PROCESS_STAGE("wall_redefine_options_alloc",
+        ProArrayAlloc(
+            1,
+            sizeof(ProFeatureCreateOptions),
+            1,
+            (ProArray *)&options));
+    options[0] = PRO_FEAT_CR_DEFINE_MISS_ELEMS;
+    *failure_stage = "wall_feature_redefine";
+    trace_stage_write(*failure_stage);
+    status = ProFeatureWithoptionsRedefine(
+        NULL,
+        created_feature,
+        extracted_tree,
+        options,
+        PRO_REGEN_NO_FLAGS,
+        &errors);
+    *creation_error_count += errors.error_number;
+    trace_errorlist_write(*failure_stage, status, &errors);
+    if (status != PRO_TK_NO_ERROR)
+        goto cleanup;
+    *failure_stage = "wall_regenerate";
+    trace_stage_write(*failure_stage);
+    status = ProSolidRegenerate((ProSolid)model, PRO_REGEN_FORCE_REGEN);
+
+cleanup:
+    if (errors.error_list != NULL)
+        ProArrayFree((ProArray *)&errors.error_list);
+    if (options != NULL)
+        ProArrayFree((ProArray *)&options);
+    if (extracted_tree != NULL && incomplete_feature_created)
+        ProFeatureElemtreeFree(created_feature, extracted_tree);
+    if (feature_tree != NULL)
+        ProElementFree(&feature_tree);
+    if (model_selection != NULL)
+        ProSelectionFree(&model_selection);
+    if (top_reference != NULL)
+        ProReferenceFree(top_reference);
+    if (front_reference != NULL)
+        ProReferenceFree(front_reference);
+    if (top_selection != NULL)
+        ProSelectionFree(&top_selection);
+    if (front_selection != NULL)
+        ProSelectionFree(&front_selection);
+    if (status != PRO_TK_NO_ERROR && incomplete_feature_created)
+    {
+        int feature_id = created_feature->id;
+        ProFeatureDeleteOptions delete_option = PRO_FEAT_DELETE_NO_OPTS;
+        ProFeatureDelete(
+            (ProSolid)model,
+            &feature_id,
+            1,
+            &delete_option,
+            1);
+        ProSolidRegenerate((ProSolid)model, PRO_REGEN_NO_FLAGS);
+        created_feature->id = -1;
+    }
+#undef RUN_IN_PROCESS_STAGE
+    return status;
+}
+#endif
+
 static void sort3(double values[3])
 {
     double temporary;
@@ -870,6 +1102,7 @@ int wmain(int argc, wchar_t **argv)
     int created_new_model = 0;
     int profile_created = 0;
     int feature_created = 0;
+    int sheetmetal_thickness_assigned = 0;
     int thickness_changed = 0;
     int saved = 0;
     int window_id = -1;
@@ -946,7 +1179,11 @@ int wmain(int argc, wchar_t **argv)
         started_new_session = 1;
     }
     connected = 1;
-    if (started_new_session || argc == 9)
+    if (started_new_session || argc == 9
+#ifdef CODEX_INTERNAL_COMMAND_BUILD
+        || argc == 8
+#endif
+        )
     {
         if (argc == 8)
         {
@@ -1117,6 +1354,7 @@ int wmain(int argc, wchar_t **argv)
     status = ProSmtPartThicknessGet((ProPart)model, &thickness_dimension);
     if (status == PRO_TK_NO_ERROR)
     {
+        sheetmetal_thickness_assigned = 1;
         status = ProDimensionValueGet(&thickness_dimension, &old_thickness);
         if (status != PRO_TK_NO_ERROR)
         {
@@ -1144,6 +1382,7 @@ int wmain(int argc, wchar_t **argv)
     {
         /* An empty sheetmetal template has no thickness dimension yet.
            The first unattached wall creates it from PRO_E_STD_SMT_THICKNESS. */
+        sheetmetal_thickness_assigned = 0;
         old_thickness = thickness;
     }
     else
@@ -1152,6 +1391,20 @@ int wmain(int argc, wchar_t **argv)
         goto cleanup;
     }
 
+#ifdef CODEX_INTERNAL_COMMAND_BUILD
+    profile_created = 0;
+    created_profile.id = -1;
+    status = create_unattached_wall_in_process(
+        model,
+        feature_name,
+        length,
+        width,
+        thickness,
+        !sheetmetal_thickness_assigned,
+        &created_feature,
+        &creation_error_count,
+        &failure_stage);
+#else
     status = create_unattached_wall(
         model,
         profile_name,
@@ -1159,11 +1412,13 @@ int wmain(int argc, wchar_t **argv)
         length,
         width,
         thickness,
+        !sheetmetal_thickness_assigned,
         &created_profile,
         &created_feature,
         &profile_created,
         &creation_error_count,
         &failure_stage);
+#endif
     if (status != PRO_TK_NO_ERROR)
     {
         exit_code = write_error(out, failure_stage, status);
@@ -1293,8 +1548,11 @@ int wmain(int argc, wchar_t **argv)
     fputs(",\"model\":", out);
     write_wide_json_string(out, actual_name);
     fputs(",\"model_subtype\":\"sheetmetal\",\"profile_name\":", out);
-    write_wide_json_string(out, profile_name);
-    fprintf(out, ",\"profile_id\":%d,\"feature_name\":", created_profile.id);
+    write_wide_json_string(
+        out, profile_created ? profile_name : feature_name);
+    fprintf(out, ",\"profile_id\":%d,\"section_owner\":\"%s\",\"feature_name\":",
+        profile_created ? created_profile.id : created_feature.id,
+        profile_created ? "profile_feature" : "planar_wall_feature");
     write_wide_json_string(out, feature_name);
     fprintf(out,
         ",\"feature_id\":%d,\"feature_type_code\":%d,"

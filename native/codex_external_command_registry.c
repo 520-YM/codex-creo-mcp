@@ -143,6 +143,27 @@ static const CodexCommandEntry codex_commands[] = {
     {L"creo_write_bridge.exe", codex_cmd_creo_write_bridge}
 };
 
+static int codex_command_requires_external_worker(const wchar_t *executable)
+{
+    static const wchar_t *external_only[] = {
+        L"creo_datum_plane_bridge.exe",
+        L"creo_datum_point_bridge.exe",
+        L"creo_extrude_bridge.exe",
+        L"creo_general_sketch_bridge.exe",
+        L"creo_hole_bridge.exe",
+        L"creo_sheetmetal_plate_bridge.exe",
+        L"creo_sheetmetal_three_circle_cut_bridge.exe",
+        L"creo_skeleton_box_bridge.exe"
+    };
+    size_t index;
+    for (index = 0; index < sizeof(external_only) / sizeof(external_only[0]); ++index)
+    {
+        if (_wcsicmp(executable, external_only[index]) == 0)
+            return 1;
+    }
+    return 0;
+}
+
 static void codex_trim_line(wchar_t *line)
 {
     size_t length = line == NULL ? 0 : wcslen(line);
@@ -182,6 +203,11 @@ int codex_internal_command_file_execute(const wchar_t *command_path)
     {
         if (_wcsicmp(arguments[0], codex_commands[command_index].executable) == 0)
         {
+            if (codex_command_requires_external_worker(arguments[0]))
+            {
+                result = 4;
+                goto done;
+            }
             result = codex_commands[command_index].command(argument_count, arguments);
             goto done;
         }

@@ -17,6 +17,8 @@
 #include <ProModelitem.h>
 #include <ProArray.h>
 #include <ProUIDialog.h>
+#include <ProUICmd.h>
+#include <ProMenu.h>
 
 #define PIPE_NAME_CAPACITY 256
 #define MAX_REQUEST 4096
@@ -61,6 +63,8 @@ static char resident_response[MAX_RESPONSE];
 static wchar_t resident_pipe_name[PIPE_NAME_CAPACITY];
 static HWND resident_dispatch_window = NULL;
 static HINSTANCE resident_dispatch_instance = NULL;
+static volatile LONG resident_flat_wall_pending = 0;
+static wchar_t resident_flat_wall_command_path[MAX_COMMAND_LINE];
 
 int codex_internal_command_file_execute(const wchar_t *command_path);
 static void resident_process_request(const char *request);
@@ -118,9 +122,34 @@ ProError codex_internal_host_connection_start(
     return PRO_TK_BAD_CONTEXT;
 }
 
+/* Compatibility wrapper retained for older internal commands. Attached
+   flat-wall creation deliberately bypasses it and runs only from the
+   registered Creo UI command action below. */
+ProError codex_internal_feature_withoptions_create(
+    ProSelection model,
+    ProElement elemtree,
+    ProFeatureCreateOptions *options,
+    int flags,
+    ProFeature *feature,
+    ProErrorlist *errors)
+{
+    ProError status;
+    int option_count = 0;
+    if (flags != PRO_REGEN_NO_FLAGS)
+        return PRO_TK_BAD_INPUTS;
+    if (options != NULL)
+    {
+        status = ProArraySizeGet((ProArray)options, &option_count);
+        if (status != PRO_TK_NO_ERROR)
+            return status;
+    }
+    return ProFeatureCreate(
+        model, elemtree, options, option_count, feature, errors);
+}
+
 #define ProEngineerConnect resident_fake_connect
 #define ProEngineerDisconnect resident_fake_disconnect
-#define wmain resident_flat_wall_wmain
+#define wmain resident_ui_flat_wall_wmain
 #include "creo_sheetmetal_flat_wall_bridge.c"
 #undef wmain
 #undef ProEngineerDisconnect
@@ -1732,7 +1761,10 @@ static int resident_command_file(const wchar_t *command_path)
         argument_count++;
     }
     fclose(command);
-    result = resident_flat_wall_wmain(argument_count, arguments);
+    if (argument_count != 11)
+        result = 2;
+    else
+        result = resident_ui_flat_wall_wmain(argument_count, arguments);
     for (index = 0; index < argument_count; index++)
         free(arguments[index]);
     return result;
@@ -1749,10 +1781,73 @@ static void resident_set_response(const char *format, int exit_code)
     SetEvent(resident_response_event);
 }
 
+static uiCmdAccessState resident_flat_wall_access(uiCmdAccessMode mode)
+{
+    (void)mode;
+    return ACCESS_AVAILABLE;
+}
+
+static int resident_flat_wall_action(
+    uiCmdCmdId command, uiCmdValue *value, void *push_data)
+{
+    wchar_t command_path[MAX_COMMAND_LINE];
+    int exit_code;
+    (void)command;
+    (void)value;
+    (void)push_data;
+
+    if (InterlockedExchange(&resident_flat_wall_pending, 0) == 0)
+        return 0;
+    EnterCriticalSection(&resident_lock);
+    wcscpy_s(
+        command_path, MAX_COMMAND_LINE,
+        resident_flat_wall_command_path);
+    resident_flat_wall_command_path[0] = L'\0';
+    LeaveCriticalSection(&resident_lock);
+
+    exit_code = resident_command_file(command_path);
+    resident_set_response(
+        "{\"ok\":%s,\"persistent\":true,"
+        "\"internal_executor\":true,\"ui_action\":true,"
+        "\"exit_code\":%d}\n",
+        exit_code);
+    return 0;
+}
+
 static void resident_process_request(const char *request)
 {
     wchar_t path[2048];
     int exit_code;
+    ProError macro_status;
+    if (strncmp(request, "FLATWALLFILE|", 13) == 0)
+    {
+        if (!resident_utf8_to_wide(request + 13, path, 2048) ||
+            InterlockedCompareExchange(
+                &resident_flat_wall_pending, 1, 0) != 0)
+        {
+            resident_set_response(
+                "{\"ok\":%s,\"persistent\":true,"
+                "\"stage\":\"ui_action_request_guard\","
+                "\"exit_code\":%d}\n", 2);
+            return;
+        }
+        EnterCriticalSection(&resident_lock);
+        wcscpy_s(
+            resident_flat_wall_command_path,
+            MAX_COMMAND_LINE, path);
+        LeaveCriticalSection(&resident_lock);
+        macro_status = ProMacroLoad(
+            L"~ Command `CodexCreoInternalFlatWallAction`;");
+        if (macro_status != PRO_TK_NO_ERROR)
+        {
+            InterlockedExchange(&resident_flat_wall_pending, 0);
+            resident_set_response(
+                "{\"ok\":%s,\"persistent\":true,"
+                "\"stage\":\"ui_action_schedule\","
+                "\"exit_code\":%d}\n", (int)macro_status);
+        }
+        return;
+    }
     if (strncmp(request, "EXECFILE|", 9) == 0)
     {
         if (!resident_utf8_to_wide(request + 9, path, 2048))
@@ -2154,16 +2249,17 @@ static void resident_process_request(const char *request)
             "\"pattern_set\":true,\"exit_code\":%d}\n", exit_code);
         return;
     }
-    if (!resident_utf8_to_wide(request, path, 2048))
-    {
-        resident_set_response(
-            "{\"ok\":%s,\"persistent\":true,\"exit_code\":%d}\n", 2);
-        return;
-    }
-    exit_code = resident_command_file(path);
+    /*
+       The former catch-all treated an unknown request as an attached-wall
+       command file and ran feature creation inside Creo.  Creo 10 can raise
+       a non-continuable native exception on that path.  Attached walls now
+       run only through the registered Creo UI command action, so reject the
+       legacy catch-all entry instead of risking the host process.
+    */
     resident_set_response(
-        "{\"ok\":%s,\"persistent\":true,\"exit_code\":%d}\n",
-        exit_code);
+        "{\"ok\":%s,\"persistent\":true,"
+        "\"stage\":\"unsupported_internal_command\","
+        "\"exit_code\":%d}\n", 4);
 }
 
 static LRESULT CALLBACK resident_dispatch_proc(
@@ -2314,6 +2410,8 @@ __declspec(dllexport) int user_initialize(
 {
     WNDCLASSW window_class;
     ATOM class_atom;
+    ProError action_status;
+    uiCmdCmdId action_id = NULL;
     (void)argc;
     (void)argv;
     (void)version;
@@ -2327,6 +2425,8 @@ __declspec(dllexport) int user_initialize(
         (unsigned long)GetCurrentProcessId());
 
     InitializeCriticalSection(&resident_lock);
+    resident_flat_wall_command_path[0] = L'\0';
+    InterlockedExchange(&resident_flat_wall_pending, 0);
     resident_stop_event = CreateEventW(NULL, TRUE, FALSE, NULL);
     resident_response_event = CreateEventW(NULL, FALSE, FALSE, NULL);
     if (resident_stop_event == NULL || resident_response_event == NULL)
@@ -2355,6 +2455,24 @@ __declspec(dllexport) int user_initialize(
     {
         wcscpy_s(err_buffer, 80, L"CreoSafeResident dispatch window failed");
         resident_startup_log(L"dispatch_window", (int)GetLastError());
+        UnregisterClassW(DISPATCH_CLASS_NAME, resident_dispatch_instance);
+        return -1;
+    }
+    action_status = ProCmdActionAdd(
+        "CodexCreoInternalFlatWallAction",
+        resident_flat_wall_action,
+        uiProe2ndImmediate,
+        resident_flat_wall_access,
+        PRO_B_TRUE,
+        PRO_B_FALSE,
+        &action_id);
+    if (action_status != PRO_TK_NO_ERROR &&
+        action_status != PRO_TK_E_FOUND)
+    {
+        wcscpy_s(err_buffer, 80, L"CreoSafeResident action setup failed");
+        resident_startup_log(L"flat_wall_action", (int)action_status);
+        DestroyWindow(resident_dispatch_window);
+        resident_dispatch_window = NULL;
         UnregisterClassW(DISPATCH_CLASS_NAME, resident_dispatch_instance);
         return -1;
     }

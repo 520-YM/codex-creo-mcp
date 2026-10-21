@@ -65,15 +65,23 @@ function Compile-Source {
         [Parameter(Mandatory=$true)][string]$Object,
         [string]$WideEntry,
         [string]$AnsiEntry,
-        [switch]$InternalCommand
+        [switch]$InternalCommand,
+        [switch]$LegacyFeatureCreate
     )
     $arguments = @($commonCompile)
     if ($InternalCommand) {
         $arguments += @(
+            '/DCODEX_INTERNAL_COMMAND_BUILD=1',
             '/DProEngineerConnect=codex_internal_host_connect',
             '/DProEngineerDisconnect=codex_internal_host_disconnect',
             '/DProEngineerConnectionStart=codex_internal_host_connection_start',
             "/FI$sourceRoot\codex_internal_host.h"
+        )
+    }
+    if ($LegacyFeatureCreate) {
+        $arguments += @(
+            '/DProFeatureWithoptionsCreate=codex_internal_feature_withoptions_create',
+            "/FI$sourceRoot\codex_internal_feature_compat.h"
         )
     }
     if ($WideEntry) { $arguments += "/Dwmain=$WideEntry" }
@@ -135,10 +143,21 @@ $wideCommands = @(
     'creo_verify_copy',
     'creo_write_bridge'
 )
+$legacyFeatureCreateCommands = @(
+    'creo_datum_plane_bridge',
+    'creo_datum_point_bridge',
+    'creo_extrude_bridge',
+    'creo_general_sketch_bridge',
+    'creo_hole_bridge',
+    'creo_sheetmetal_plate_bridge',
+    'creo_sheetmetal_three_circle_cut_bridge',
+    'creo_skeleton_box_bridge'
+)
 foreach ($name in $wideCommands) {
     $objectPath = Join-Path $buildRoot ("cmd_$name.obj")
     Compile-Source -Source "$name.c" -Object $objectPath `
-        -WideEntry "codex_cmd_$name" -InternalCommand
+        -WideEntry "codex_cmd_$name" -InternalCommand `
+        -LegacyFeatureCreate:($legacyFeatureCreateCommands -contains $name)
     $objects.Add($objectPath)
 }
 foreach ($name in @('creo_bridge', 'creo_export_bridge')) {

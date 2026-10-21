@@ -64,23 +64,43 @@ const proCommMsgExe =
   path.join(creoRuntimeObj, 'pro_comm_msg.exe');
 const nmsQueryExe = path.resolve(
   path.join(creoRuntimeObj, '..', 'nms', 'nmsq.exe'));
+const creoUiFlatWallSection = path.resolve(
+  process.env.CREO_UI_FLAT_WALL_SECTION ||
+  path.join(creoRuntimeObj, '..', '..', 'text', 'smt', 'flat_shapes',
+    'rect_flat_wall.sec'));
 const persistentFlatWallBridge = path.join(
   bridgeRoot, 'creo_sheetmetal_flat_wall_persistent_bridge.exe');
 const legacyResidentPipe = '\\\\.\\pipe\\creo_safe_flat_wall_v1';
 const internalResidentDll = path.join(
-  bridgeRoot, 'creo_safe_resident_internal_v15.dll');
+  bridgeRoot, 'creo_safe_resident_internal_v17.dll');
 const internalResidentLoader = path.join(
-  bridgeRoot, 'creo_internal_resident_loader_v15.exe');
+  bridgeRoot, 'creo_internal_resident_loader_v17.exe');
 let activePersistentBinding = null;
 const creoHoleTableRoot = path.resolve(
   process.env.CREO_HOLE_TABLE_ROOT ||
   path.join(creoRuntimeObj, '..', '..', 'text', 'hole')
 );
-const creoSingleFlatWallSection = path.resolve(
-  process.env.CREO_SINGLE_FLAT_WALL_SECTION ||
-  path.join(creoRuntimeObj, '..', '..', 'text', 'smt', 'flat_shapes',
-    'rect_flat_wall.sec')
-);
+/*
+ * These commands create new Creo features through Pro/TOOLKIT.  Creo 10 can
+ * raise a non-continuable native exception when the feature-create wrappers
+ * are called from an in-process DLL, which terminates the whole Creo session.
+ * Keep reads and ordinary edits on the fast resident connection, but execute
+ * feature creation in a short-lived asynchronous TOOLKIT client.  A worker
+ * failure then stays outside Creo, and the bridge still verifies the single
+ * bound Creo PID before connecting. Attached sheet-metal flat-wall tools are
+ * deliberately excluded: they must use only the bound in-process resident
+ * connection and must never fall back to an external connection.
+ */
+const externalFeatureCreationCommands = new Set([
+  'creo_datum_plane_bridge.exe',
+  'creo_datum_point_bridge.exe',
+  'creo_extrude_bridge.exe',
+  'creo_general_sketch_bridge.exe',
+  'creo_hole_bridge.exe',
+  'creo_sheetmetal_plate_bridge.exe',
+  'creo_sheetmetal_three_circle_cut_bridge.exe',
+  'creo_skeleton_box_bridge.exe',
+]);
 
 function ensureHoleTableToken(value, label) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_.-]{1,31}$/.test(value)) {
@@ -1276,8 +1296,8 @@ const toolDefinitions = [
     },
   },
   {
-    name: 'creo_create_project_sheetmetal_flat_wall',
-    description: 'Create one attached flat wall on one verified straight boundary edge of the current expected native Creo sheet-metal project part. The tool calculates the inside bend radius as sheet thickness x 0.5, creates a 90-degree wall using the requested height, verifies the attachment edge ID and length, wall type, active feature, radius rule, regeneration, solid-volume increase and saved file, then moves older versions of only that model family to the Windows Recycle Bin. Any failure before save deletes the partial feature.',
+    name: 'creo_create_project_sheetmetal_ui_flat_wall',
+    description: 'Create exactly one attached sheet-metal flat wall on one verified straight boundary edge by scheduling a registered Creo UI command action inside the already-bound resident DLL. This tool never uses an external Creo connection and never batches multiple edges into one feature. It verifies the expected model, edge ID and length, requested height and angle, inside bend radius rule, active feature, regeneration, solid-volume increase and saved file. Any failure before save removes the partial feature.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1299,47 +1319,7 @@ const toolDefinitions = [
       additionalProperties: false,
     },
     annotations: {
-      title: 'Create one Creo sheet-metal flat wall',
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-  },
-  {
-    name: 'creo_create_project_sheetmetal_flat_walls_batch',
-    description: 'Create one native Creo sheet-metal flat-wall feature on exactly two verified straight boundary edges in one Pro/TOOLKIT connection and one transaction. Both walls share the requested angle and height; the inside bend radius is sheet thickness x 0.5. The tool changes to the guarded project directory inside the same bridge process, verifies both attachment edge IDs and lengths, feature type, radius rule, regeneration and volume increase, saves once, and then recycles older versions of only the target part family. Any failure before save deletes the complete batch feature.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        expected_model: {
-          type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 31,
-        },
-        feature_name: {
-          type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 31,
-        },
-        edges: {
-          type: 'array', minItems: 2, maxItems: 2,
-          items: {
-            type: 'object',
-            properties: {
-              edge_id: { type: 'integer', minimum: 1, maximum: 100000000 },
-              expected_edge_length: { type: 'number', minimum: 0.01, maximum: 100000 },
-            },
-            required: ['edge_id', 'expected_edge_length'],
-            additionalProperties: false,
-          },
-        },
-        angle: { type: 'number', minimum: 1, maximum: 179, default: 90 },
-        wall_height: { type: 'number', minimum: 0.01, maximum: 100000 },
-      },
-      required: [
-        'expected_model', 'feature_name', 'edges', 'wall_height',
-      ],
-      additionalProperties: false,
-    },
-    annotations: {
-      title: 'Create two Creo sheet-metal flat walls in one batch',
+      title: 'Create one Creo sheet-metal wall through a UI action',
       readOnlyHint: false,
       destructiveHint: true,
       idempotentHint: false,
@@ -2655,7 +2635,121 @@ function withProjectModelCleanup(projectDirectory, result, keepFiles) {
   return { ...result, version_cleanup: cleanup };
 }
 
+function ensureSingleCreoExternalTarget() {
+  const bridge = ensureInternalCreoBridge();
+  const completed = spawnSync(
+    'powershell.exe',
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+      "@(Get-Process -Name xtop -ErrorAction SilentlyContinue | " +
+      "Select-Object -ExpandProperty Id) | ConvertTo-Json -Compress"],
+    {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 3000,
+      maxBuffer: 1024 * 1024,
+    });
+  if (completed.error || completed.status !== 0) {
+    throw completed.error || new Error('无法核对当前 Creo 进程。');
+  }
+  let processIds;
+  try {
+    processIds = JSON.parse(String(completed.stdout || '[]').replace(/^\uFEFF/, ''));
+  } catch (_) {
+    throw new Error('无法解析当前 Creo 进程列表。');
+  }
+  if (!Array.isArray(processIds)) processIds = processIds ? [processIds] : [];
+  processIds = processIds.map(Number).filter(Number.isInteger);
+  const targetProcessId = Number(bridge.binding.target_process_id);
+  if (processIds.length !== 1 || processIds[0] !== targetProcessId) {
+    const error = new Error(
+      '高风险建模命令要求当前 Windows 会话中只有一个 Creo；拒绝连接到不确定的窗口。');
+    error.detail = {
+      ok: false,
+      stage: 'single_creo_external_target_guard',
+      target_creo_process_id: targetProcessId,
+      running_creo_process_ids: processIds,
+    };
+    throw error;
+  }
+  return bridge;
+}
+
+function runExternalBridge(executableName, args) {
+  if (!externalFeatureCreationCommands.has(executableName)) {
+    throw new Error(`未经批准的外部建模桥接：${executableName}`);
+  }
+  const executablePath = path.resolve(bridgeRoot, executableName);
+  if (path.dirname(executablePath).toLowerCase() !== bridgeRoot.toLowerCase() ||
+      !fs.existsSync(executablePath) || !fs.statSync(executablePath).isFile()) {
+    throw new Error(`Creo 外部建模桥接不存在：${executablePath}`);
+  }
+  const bridge = ensureSingleCreoExternalTarget();
+  const runtimeDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'creo-mcp-external-create-'));
+  const resultPath = path.join(runtimeDirectory, 'result.json');
+  const started = process.hrtime.bigint();
+  try {
+    const completed = spawnSync(
+      executablePath,
+      [resultPath, ...args.map((value) => String(value))],
+      {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 60000,
+        maxBuffer: 4 * 1024 * 1024,
+        env: {
+          ...process.env,
+          PRO_DIRECTORY: path.resolve(creoRuntimeObj, '..', '..'),
+          PRO_MACHINE_TYPE: path.basename(path.dirname(creoRuntimeObj)),
+          PRO_COMM_MSG_EXE: proCommMsgExe,
+          RPC_TIMEOUT: '120',
+          PATH: [creoRuntimeObj, creoRuntimeLib, process.env.PATH || '']
+            .filter(Boolean).join(path.delimiter),
+        },
+      });
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    let data = null;
+    if (fs.existsSync(resultPath)) {
+      data = JSON.parse(
+        fs.readFileSync(resultPath, 'utf8').replace(/^\uFEFF/, ''));
+    }
+    if (completed.error || completed.status !== 0 || !data || data.ok !== true) {
+      const error = completed.error || new Error(
+        `Creo 独立建模桥接未完成（退出码 ${completed.status}）。`);
+      error.detail = data || {
+        ok: false,
+        stage: completed.error && completed.error.code === 'ETIMEDOUT'
+          ? 'external_feature_create_timeout'
+          : 'external_feature_create_worker',
+        exit_code: completed.status,
+        signal: completed.signal,
+        stderr: String(completed.stderr || '').trim(),
+        target_creo_process_id: bridge.binding.target_process_id,
+      };
+      throw error;
+    }
+    return {
+      ...data,
+      external_worker: true,
+      connection_mode: 'out_of_process_toolkit',
+      crash_isolation: 'worker_process',
+      session_bound: true,
+      target_creo_process_id: bridge.binding.target_process_id,
+      worker_process_id: completed.pid || null,
+      connection_reused: false,
+      timings_ms: {
+        total: Number(elapsedMs.toFixed(1)),
+      },
+    };
+  } finally {
+    fs.rmSync(runtimeDirectory, { recursive: true, force: true });
+  }
+}
+
 function runBridge(executableName, args) {
+  if (externalFeatureCreationCommands.has(executableName)) {
+    return runExternalBridge(executableName, args);
+  }
   const runtimeDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'creo-mcp-'));
   const resultPath = path.join(runtimeDirectory, 'result.json');
   const commandPath = path.join(runtimeDirectory, 'command.txt');
@@ -2694,6 +2788,56 @@ function runBridge(executableName, args) {
       target_creo_process_id: bridge.binding.target_process_id,
       worker_process_id: bridge.binding.target_process_id,
       connection_reused: !bridge.resident_started,
+    };
+  } finally {
+    fs.rmSync(runtimeDirectory, { recursive: true, force: true });
+  }
+}
+
+function runInternalUiFlatWall(args) {
+  const runtimeDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'creo-mcp-ui-flat-wall-'));
+  const resultPath = path.join(runtimeDirectory, 'result.json');
+  const commandPath = path.join(runtimeDirectory, 'command.txt');
+  const started = process.hrtime.bigint();
+  try {
+    const commandArguments = [resultPath, ...args].map((value) => String(value));
+    if (commandArguments.some((value) => /[\r\n]/.test(value))) {
+      throw new Error('Creo UI action arguments cannot contain newlines.');
+    }
+    fs.writeFileSync(commandPath, commandArguments.join('\n'), 'utf8');
+    const bridge = ensureInternalCreoBridge();
+    const response = requestPersistentFlatWall(
+      bridge.binding, `FLATWALLFILE|${commandPath}`);
+    let data = null;
+    if (fs.existsSync(resultPath)) {
+      data = JSON.parse(
+        fs.readFileSync(resultPath, 'utf8').replace(/^\uFEFF/, ''));
+    }
+    if (!response.ok || response.exit_code !== 0 || !data || data.ok !== true) {
+      const error = new Error(
+        `Creo UI action flat-wall operation did not complete ` +
+        `(exit code ${response.exit_code}).`);
+      error.detail = data || {
+        ok: false,
+        stage: response.stage || 'ui_action_flat_wall',
+        exit_code: response.exit_code,
+      };
+      throw error;
+    }
+    return {
+      ...data,
+      internal_resident: true,
+      execution_context: 'registered_creo_ui_command_action',
+      connection_mode: 'in_process_dll',
+      external_connection_used: false,
+      session_bound: true,
+      target_creo_process_id: bridge.binding.target_process_id,
+      worker_process_id: bridge.binding.target_process_id,
+      connection_reused: !bridge.resident_started,
+      timings_ms: {
+        total: Number((Number(process.hrtime.bigint() - started) / 1e6).toFixed(1)),
+      },
     };
   } finally {
     fs.rmSync(runtimeDirectory, { recursive: true, force: true });
@@ -3207,7 +3351,7 @@ function ensurePersistentFlatWallBridge() {
     `${JSON.stringify(launchDiagnostics)}`);
 }
 
-function createInternalCreoBinding(targetSession, version = 'v15') {
+function createInternalCreoBinding(targetSession, version = 'v17') {
   const targetProcessId = Number(targetSession.process_id);
   const protocol = `creo-safe-internal-${version}`;
   return {
@@ -3278,7 +3422,7 @@ function internalCreoIdentity(binding, ping) {
 
 function tryReuseActiveInternalCreoBridge() {
   if (!activePersistentBinding ||
-      !['creo-safe-internal-v15', 'creo-safe-internal-v14', 'creo-safe-internal-v13', 'creo-safe-internal-v11']
+      !['creo-safe-internal-v17', 'creo-safe-internal-v16', 'creo-safe-internal-v15', 'creo-safe-internal-v14', 'creo-safe-internal-v13', 'creo-safe-internal-v11']
         .includes(activePersistentBinding.protocol)) {
     return null;
   }
@@ -3329,7 +3473,7 @@ function tryDiscoverLoadedInternalCreoBridge() {
     processes = processes.filter((item) => Number(item.Id) === explicit);
   }
   for (const processInfo of processes) {
-    for (const version of ['v15', 'v14', 'v13', 'v11']) {
+    for (const version of ['v17', 'v16', 'v15', 'v14', 'v13', 'v11']) {
       const binding = createInternalCreoBinding({
         process_id: Number(processInfo.Id),
         connect_id: '', display: '', user: '',
@@ -3370,8 +3514,8 @@ function ensureInternalCreoBridge() {
   const sessions = discoverCreoSessions();
   const targetSession = selectTargetSession(
     sessions, activePersistentBinding, process.env.CREO_TARGET_PROCESS_ID);
-  let binding = createInternalCreoBinding(targetSession, 'v15');
-  for (const version of ['v15', 'v14', 'v13', 'v11']) {
+  let binding = createInternalCreoBinding(targetSession, 'v17');
+  for (const version of ['v17', 'v16', 'v15', 'v14', 'v13', 'v11']) {
     binding = createInternalCreoBinding(targetSession, version);
     try {
       const ping = requestPersistentFlatWall(binding, 'PING');
@@ -3390,7 +3534,7 @@ function ensureInternalCreoBridge() {
       // This Creo process has not loaded this supported DLL version.
     }
   }
-  binding = createInternalCreoBinding(targetSession, 'v15');
+  binding = createInternalCreoBinding(targetSession, 'v17');
 
   if (process.env.CREO_ALLOW_DYNAMIC_INTERNAL_LOAD !== '1') {
     const error = new Error(
@@ -3577,43 +3721,6 @@ function runPersistentBasicModelRead() {
         total: Number(milliseconds(
           readFinished, totalStarted).toFixed(1)),
       },
-    };
-  } finally {
-    fs.rmSync(runtimeDirectory, { recursive: true, force: true });
-  }
-}
-
-function runPersistentFlatWall(args) {
-  const runtimeDirectory = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'creo-mcp-flat-wall-'));
-  const resultPath = path.join(runtimeDirectory, 'result.json');
-  const commandPath = path.join(runtimeDirectory, 'command.txt');
-  try {
-    fs.writeFileSync(
-      commandPath,
-      `${[resultPath, ...args].join('\n')}\n`,
-      'utf8');
-    const bridge = ensureInternalCreoBridge();
-    const response = requestPersistentFlatWall(
-      bridge.binding, commandPath);
-    let data = null;
-    if (fs.existsSync(resultPath)) {
-      data = JSON.parse(
-        fs.readFileSync(resultPath, 'utf8').replace(/^\uFEFF/, ''));
-    }
-    if (!response.ok || response.exit_code !== 0) {
-      const error = new Error(
-        `Persistent Creo flat-wall operation did not complete (exit code ${response.exit_code}).`);
-      error.detail = data || response;
-      throw error;
-    }
-    return {
-      ...(data || { ok: true }),
-      persistent_bridge: true,
-      resident_started: Boolean(bridge.resident_started),
-      connection_reused: !bridge.resident_started,
-      automatic_disconnect: 'when_current_creo_session_exits',
-      session_identity: bridge.identity,
     };
   } finally {
     fs.rmSync(runtimeDirectory, { recursive: true, force: true });
@@ -4340,7 +4447,7 @@ function handleToolCall(name, args) {
     ]));
   }
 
-  if (name === 'creo_create_project_sheetmetal_flat_wall') {
+  if (name === 'creo_create_project_sheetmetal_ui_flat_wall') {
     const projectDirectory = resolveCurrentCreoWorkingDirectory();
     const expectedModel = ensureCreoModelName(args.expected_model, 'expected_model');
     const featureName = ensureCreoModelName(args.feature_name, 'feature_name');
@@ -4358,14 +4465,15 @@ function handleToolCall(name, args) {
     if (!Number.isFinite(angle) || angle < 1 || angle > 179) {
       throw new Error('angle must be from 1 to 179 degrees.');
     }
-    if (!Number.isFinite(wallHeight) || wallHeight < 0.01 || wallHeight > 100000) {
+    if (!Number.isFinite(wallHeight) ||
+        wallHeight < 0.01 || wallHeight > 100000) {
       throw new Error('wall_height must be from 0.01 to 100000 mm.');
     }
-    if (!fs.existsSync(creoSingleFlatWallSection) ||
-        !fs.statSync(creoSingleFlatWallSection).isFile()) {
-      throw new Error(`Creo flat-wall section not found: ${creoSingleFlatWallSection}`);
+    if (!fs.existsSync(creoUiFlatWallSection) ||
+        !fs.statSync(creoUiFlatWallSection).isFile()) {
+      throw new Error(`Creo UI flat-wall section not found: ${creoUiFlatWallSection}`);
     }
-    const result = runPersistentFlatWall([
+    const result = runInternalUiFlatWall([
       expectedModel,
       featureName,
       projectDirectory,
@@ -4374,61 +4482,7 @@ function handleToolCall(name, args) {
       String(angle),
       String(wallHeight),
       'none',
-      creoSingleFlatWallSection,
-    ]);
-    const savedPath = resolveReturnedProjectModel(
-      projectDirectory, result.saved_file, ['.prt']);
-    return toolResult(withProjectModelCleanup(
-      projectDirectory, result, [savedPath]));
-  }
-
-  if (name === 'creo_create_project_sheetmetal_flat_walls_batch') {
-    const projectDirectory = resolveCurrentCreoWorkingDirectory();
-    const expectedModel = ensureCreoModelName(args.expected_model, 'expected_model');
-    const featureName = ensureCreoModelName(args.feature_name, 'feature_name');
-    const angle = args.angle === undefined ? 90 : Number(args.angle);
-    const wallHeight = Number(args.wall_height);
-    if (!Array.isArray(args.edges) || args.edges.length !== 2) {
-      throw new Error('edges must contain exactly two boundary edges.');
-    }
-    const edges = args.edges.map((edge, index) => {
-      const edgeId = Number(edge && edge.edge_id);
-      const expectedLength = Number(edge && edge.expected_edge_length);
-      if (!Number.isInteger(edgeId) || edgeId < 1 || edgeId > 100000000) {
-        throw new Error(`edges[${index}].edge_id is invalid.`);
-      }
-      if (!Number.isFinite(expectedLength) ||
-          expectedLength < 0.01 || expectedLength > 100000) {
-        throw new Error(
-          `edges[${index}].expected_edge_length must be from 0.01 to 100000 mm.`);
-      }
-      return { edgeId, expectedLength };
-    });
-    if (edges[0].edgeId === edges[1].edgeId) {
-      throw new Error('The two edge IDs must be different.');
-    }
-    if (!Number.isFinite(angle) || angle < 1 || angle > 179) {
-      throw new Error('angle must be from 1 to 179 degrees.');
-    }
-    if (!Number.isFinite(wallHeight) || wallHeight < 0.01 || wallHeight > 100000) {
-      throw new Error('wall_height must be from 0.01 to 100000 mm.');
-    }
-    if (!fs.existsSync(creoSingleFlatWallSection) ||
-        !fs.statSync(creoSingleFlatWallSection).isFile()) {
-      throw new Error(`Creo flat-wall section not found: ${creoSingleFlatWallSection}`);
-    }
-    const result = runPersistentFlatWall([
-      expectedModel,
-      featureName,
-      projectDirectory,
-      String(edges[0].edgeId),
-      String(edges[0].expectedLength),
-      String(edges[1].edgeId),
-      String(edges[1].expectedLength),
-      String(angle),
-      String(wallHeight),
-      'none',
-      creoSingleFlatWallSection,
+      creoUiFlatWallSection,
     ]);
     const savedPath = resolveReturnedProjectModel(
       projectDirectory, result.saved_file, ['.prt']);
