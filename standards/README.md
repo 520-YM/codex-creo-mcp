@@ -9,6 +9,8 @@
 - `source-private/` 保存原始 Word、Excel 等内部资料，默认不纳入 Git。
 - 原始资料与整理后的规则冲突时，停止自动修改并请求人工确认。
 - 自动化只能报告经过 API 读回验证的真实结果。
+- 新电脑上的 Codex 应从根目录 `AGENTS.md` 开始，并读取机器可读的对话提炼知识。
+- 实时 Creo API 读回结果优先于带日期的历史观察记录。
 
 ## 目录
 
@@ -25,6 +27,7 @@
 - [Creo 会话首条命令流程](rules/11_会话首条命令流程.md)
 - [Creo 常用操作流程](rules/12_Creo常用操作流程.md)
 - [质量读取与力学计算范围](rules/13_质量读取与力学计算范围.md)
+- [对话提炼与执行记忆](rules/14_对话提炼与执行记忆.md)
 - [资料来源清单](sources.md)
 
 ## 结构化数据
@@ -35,15 +38,16 @@
 - `data/filter_cotton_rules.json`
 - `data/automation_policy.json`
 - `data/workflow_rules.json`
+- `data/conversation_knowledge.json`
 
 ## 更新流程
 
-1. 更新原始 Excel 或 Word。
+1. 更新原始 Excel、Word 或经确认的对话规则。
 2. 对比变化项，不直接覆盖已确认规则。
 3. 同步 Markdown 和 JSON。
-4. 校验单位、方向、允许偏差和模型特征名称。
+4. 校验单位、方向、允许偏差、模型特征名称、运行协议和工具数量。
 5. 提交 Git 版本并记录确认人和日期。
 
 ## 规则优先级
 
-当次明确指令 > 已批准的项目专用规则 > 本规则库中的公司通用规则 > Creo 默认行为。
+当次明确指令 > 实时 Creo API 读回 > 已批准的项目专用规则 > 本规则库中的公司通用规则 > 带日期的历史观察 > Creo 默认行为。
