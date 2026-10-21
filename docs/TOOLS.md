@@ -1,6 +1,6 @@
 # MCP 工具清单
 
-正式工具数量：**68**。
+正式工具数量：**69**。
 
 所有工具均不得接收 `project_name` 或固定项目目录。涉及模型文件时，目录来源必须是当前 Creo 会话。
 
@@ -275,3 +275,7 @@ After a newly generated part has been verified, move every other .prt or .prt.<v
 ## 68. `creo_delete_current_project_feature`
 
 删除当前活动项目零件中的一个叶子特征。模型名、特征名、特征 ID 和类型代码必须全部匹配；默认特征 ID、有子特征、非活动特征或装配模型均会被拒绝。删除后重新生成、保存并回读确认特征已消失，同时保留上一版 Creo 文件用于恢复。
+
+## 69. `creo_resize_current_sheetmetal_planar_wall`
+
+安全重定义当前钣金零件中已有平面壁的四边矩形截面，不删除平面壁或截面特征。工具只移除导致正方形锁定的等长推断，按目标长宽替换矩形几何，重新生成并核对三维包络和体积；验证失败时恢复原截面，全部检查通过后才保存。
