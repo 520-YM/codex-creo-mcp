@@ -27,8 +27,8 @@ Copy-Item -LiteralPath (Join-Path $repoRoot 'mcp\wall-mount-orchestrator.cjs') -
 Copy-Item -LiteralPath (Join-Path $repoRoot 'mcp\cleanup_project_versions.ps1') -Destination $InstallRoot -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot 'mcp\cleanup_project_model_versions.ps1') -Destination $InstallRoot -Force
 Copy-Item -Path (Join-Path $distBin '*.exe') -Destination $installBin -Force
-$residentDll = Join-Path $distBin 'creo_safe_resident_internal_v14.dll'
-$residentLoader = Join-Path $distBin 'creo_internal_resident_loader_v14.exe'
+$residentDll = Join-Path $distBin 'creo_safe_resident_internal_v15.dll'
+$residentLoader = Join-Path $distBin 'creo_internal_resident_loader_v15.exe'
 foreach ($required in @($residentDll, $residentLoader)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Internal Creo runtime was not built: $required"
@@ -44,7 +44,7 @@ $datLines = @(
     'name CreoSafeResident',
     'startup dll',
     'revision 25',
-    ('exec_file ' + (Join-Path $installBin 'creo_safe_resident_internal_v14.dll')),
+    ('exec_file ' + (Join-Path $installBin 'creo_safe_resident_internal_v15.dll')),
     ('text_dir ' + $installText),
     'delay_start false',
     'allow_stop true',
@@ -78,7 +78,7 @@ if ($RegisterConfigProPath) {
     Ok = $true
     InstallRoot = $InstallRoot
     ResidentMode = 'normal_creo_startup_independent_dat'
-    ResidentVersion = 'v14'
+    ResidentVersion = 'v15'
     CreoConfigChanged = $configChanged
     CreoConfigBackup = $configBackup
     WJT276Changed = $false

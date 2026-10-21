@@ -38,7 +38,7 @@ $environmentCommand = "call `"$vsDevCmd`" -arch=amd64 -host_arch=amd64 >nul && s
 $environmentLines = & cmd.exe /d /s /c $environmentCommand
 if ($LASTEXITCODE -ne 0) { throw 'Visual Studio build environment failed.' }
 $developerPath = $environmentLines | Where-Object {
-    $_.StartsWith('PATH=', [StringComparison]::Ordinal)
+    $_ -match '^(?i:PATH)='
 } | Select-Object -First 1
 foreach ($line in $environmentLines) {
     $separator = $line.IndexOf('=')
@@ -52,7 +52,7 @@ foreach ($line in $environmentLines) {
     }
 }
 if (-not $developerPath) { throw 'Visual Studio developer PATH was not returned.' }
-$env:Path = $developerPath.Substring(5)
+$env:Path = $developerPath.Substring($developerPath.IndexOf('=') + 1)
 
 $commonCompile = @(
     '/nologo', '/c', '/O2', '/GS', '/fp:precise',
@@ -111,6 +111,7 @@ $wideCommands = @(
     'creo_empty_assembly_create_bridge',
     'creo_extrude_bridge',
     'creo_feature_resume_bridge',
+    'creo_feature_delete_bridge',
     'creo_feature_suppress_bridge',
     'creo_features_bridge',
     'creo_general_sketch_bridge',
@@ -122,6 +123,7 @@ $wideCommands = @(
     'creo_model_rename_bridge',
     'creo_project_workdir_bridge',
     'creo_sheetmetal_plate_bridge',
+    'creo_sheetmetal_planar_wall_resize_bridge',
     'creo_sheetmetal_reverse_wall_direction_bridge',
     'creo_sheetmetal_skeleton_link_bridge',
     'creo_sheetmetal_three_circle_cut_bridge',

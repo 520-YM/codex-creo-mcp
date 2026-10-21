@@ -11,7 +11,7 @@
 
 ## 组件
 
-- `mcp/server.cjs`：67项工具的注册、参数验证、目录边界和进程调度。
+- `mcp/server.cjs`：68项工具的注册、参数验证、目录边界和进程调度。
 - `native/*.c`：Pro/TOOLKIT 原生实现。
 - `creo_internal_resident_loader_v14.exe`：仅供诊断或明确允许的动态载入场景使用。
 - `creo_safe_resident_internal_v14.dll`：默认的 Creo 进程内统一命令执行器。

@@ -25,6 +25,7 @@ DECLARE_COMMAND(codex_cmd_creo_display_model_bridge);
 DECLARE_COMMAND(codex_cmd_creo_empty_assembly_create_bridge);
 DECLARE_COMMAND(codex_cmd_creo_extrude_bridge);
 DECLARE_COMMAND(codex_cmd_creo_feature_resume_bridge);
+DECLARE_COMMAND(codex_cmd_creo_feature_delete_bridge);
 DECLARE_COMMAND(codex_cmd_creo_feature_suppress_bridge);
 DECLARE_COMMAND(codex_cmd_creo_features_bridge);
 DECLARE_COMMAND(codex_cmd_creo_general_sketch_bridge);
@@ -36,6 +37,7 @@ DECLARE_COMMAND(codex_cmd_creo_multi_write_bridge);
 DECLARE_COMMAND(codex_cmd_creo_model_rename_bridge);
 DECLARE_COMMAND(codex_cmd_creo_project_workdir_bridge);
 DECLARE_COMMAND(codex_cmd_creo_sheetmetal_plate_bridge);
+DECLARE_COMMAND(codex_cmd_creo_sheetmetal_planar_wall_resize_bridge);
 DECLARE_COMMAND(codex_cmd_creo_sheetmetal_reverse_wall_direction_bridge);
 DECLARE_COMMAND(codex_cmd_creo_sheetmetal_skeleton_link_bridge);
 DECLARE_COMMAND(codex_cmd_creo_sheetmetal_three_circle_cut_bridge);
@@ -116,6 +118,7 @@ static const CodexCommandEntry codex_commands[] = {
     {L"creo_export_bridge.exe", codex_cmd_creo_export_bridge},
     {L"creo_extrude_bridge.exe", codex_cmd_creo_extrude_bridge},
     {L"creo_feature_resume_bridge.exe", codex_cmd_creo_feature_resume_bridge},
+    {L"creo_feature_delete_bridge.exe", codex_cmd_creo_feature_delete_bridge},
     {L"creo_feature_suppress_bridge.exe", codex_cmd_creo_feature_suppress_bridge},
     {L"creo_features_bridge.exe", codex_cmd_creo_features_bridge},
     {L"creo_general_sketch_bridge.exe", codex_cmd_creo_general_sketch_bridge},
@@ -127,6 +130,7 @@ static const CodexCommandEntry codex_commands[] = {
     {L"creo_model_rename_bridge.exe", codex_cmd_creo_model_rename_bridge},
     {L"creo_project_workdir_bridge.exe", codex_cmd_creo_project_workdir_bridge},
     {L"creo_sheetmetal_plate_bridge.exe", codex_cmd_creo_sheetmetal_plate_bridge},
+    {L"creo_sheetmetal_planar_wall_resize_bridge.exe", codex_cmd_creo_sheetmetal_planar_wall_resize_bridge},
     {L"creo_sheetmetal_reverse_wall_direction_bridge.exe", codex_cmd_creo_sheetmetal_reverse_wall_direction_bridge},
     {L"creo_sheetmetal_skeleton_link_bridge.exe", codex_cmd_creo_sheetmetal_skeleton_link_bridge},
     {L"creo_sheetmetal_three_circle_cut_bridge.exe", codex_cmd_creo_sheetmetal_three_circle_cut_bridge},

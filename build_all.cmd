@@ -60,6 +60,12 @@ if errorlevel 1 exit /b !errorlevel!
 copy /y "%ROOT%build\internal_v14_hot\creo_safe_resident_internal_v14.dll" "%OUT%\" >nul
 if errorlevel 1 exit /b !errorlevel!
 copy /y "%ROOT%build\internal_v14_hot\creo_internal_resident_loader_v14.exe" "%OUT%\" >nul
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\make_hot_internal_v15.ps1" -RepositoryRoot "%ROOT%."
+if errorlevel 1 exit /b %errorlevel%
+copy /y "%ROOT%build\internal_v15_hot\creo_safe_resident_internal_v15.dll" "%OUT%\" >nul
+if errorlevel 1 exit /b %errorlevel%
+copy /y "%ROOT%build\internal_v15_hot\creo_internal_resident_loader_v15.exe" "%OUT%\" >nul
+if errorlevel 1 exit /b %errorlevel%
 if errorlevel 1 exit /b !errorlevel!
 
 if /I "%BUILD_OPTIONAL_RESIDENT_DLL%"=="1" echo BUILD_OPTIONAL_RESIDENT_DLL is obsolete; the unified internal DLL is already built by default.

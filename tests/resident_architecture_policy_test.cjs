@@ -13,8 +13,8 @@ const registry = read('native/codex_external_command_registry.c');
 const build = read('build_all.cmd');
 const installer = read('install.ps1');
 
-assert.match(server, /creo_safe_resident_internal_v(?:11|12|13|14)\.dll/);
-assert.match(server, /creo_internal_resident_loader_v(?:11|12|13|14)\.exe/);
+assert.match(server, /creo_safe_resident_internal_v(?:11|12|13|14|15)\.dll/);
+assert.match(server, /creo_internal_resident_loader_v(?:11|12|13|14|15)\.exe/);
 assert.match(server, /function ensureInternalCreoBridge\(/);
 assert.match(server, /function tryReuseActiveInternalCreoBridge\(/);
 assert.match(server, /fast_cached_in_process_dll/);
@@ -44,6 +44,25 @@ assert.match(loader, /ProToolkitDllHandleGet\(/);
 assert.match(loader, /ProEngineerDisconnect\(/);
 assert.match(loader, /ProEngineerConnectionStart\(/);
 assert.match(registry, /codex_internal_command_file_execute/);
+assert.match(registry, /creo_feature_delete_bridge\.exe/);
+const runtimeBridges = [...server.matchAll(/runBridge\('([^']+\.exe)'/g)]
+  .map((match) => match[1]);
+const missingInternalCommands = [...new Set(runtimeBridges)]
+  .filter((executable) => !registry.includes(`{L"${executable}"`));
+assert.deepStrictEqual(
+  missingInternalCommands,
+  [],
+  'Every legacy MCP bridge must be callable through the in-process DLL registry.');
+const firstCommandBody = server.match(
+  /if \(name === 'creo_start_resident_and_get_basic_model'\) \{([\s\S]*?)\n  \}/);
+assert.ok(firstCommandBody, 'The first-command MCP handler must exist.');
+assert.doesNotMatch(
+  firstCommandBody[1],
+  /openTopAssemblyAndReadSkeleton/,
+  'The first command must not switch away from the current Creo model.');
+assert.match(firstCommandBody[1], /readInitialWallMountContextWithoutDisplay/);
+assert.match(server, /name: 'creo_delete_current_project_feature'/);
+assert.match(server, /dependent children/);
 assert.match(build, /build_internal_bridge_v11\.ps1/);
 assert.match(installer, /ResidentMode = 'normal_creo_startup_independent_dat'/);
 assert.match(installer, /RegisterConfigProPath/);
@@ -52,7 +71,7 @@ assert.match(installer, /WJT276Changed = \$false/);
 
 process.stdout.write(JSON.stringify({
   ok: true,
-  checks: 29,
+  checks: 32,
   default_resident_mode: 'normal_creo_startup_independent_dat',
   config_pro_default_modified: false,
   config_pro_explicit_registration_supported: true,

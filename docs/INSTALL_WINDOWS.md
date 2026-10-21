@@ -89,7 +89,7 @@ $env:VSDEVCMD = 'C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common
 
 ## 9. 迁移完整性检查
 
-运行 `npm run check`，确认67项工具、当前工作目录策略、内部会话绑定和14步壁挂流程测试通过。再检查返回协议为 `creo-safe-internal-v14`。
+运行 `npm run check`，确认68项工具、当前工作目录策略、内部会话绑定和14步壁挂流程测试通过。再检查返回协议为 `creo-safe-internal-v14`。
 
 ## 10. 卸载
 

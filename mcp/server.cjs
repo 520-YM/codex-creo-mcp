@@ -68,9 +68,9 @@ const persistentFlatWallBridge = path.join(
   bridgeRoot, 'creo_sheetmetal_flat_wall_persistent_bridge.exe');
 const legacyResidentPipe = '\\\\.\\pipe\\creo_safe_flat_wall_v1';
 const internalResidentDll = path.join(
-  bridgeRoot, 'creo_safe_resident_internal_v14.dll');
+  bridgeRoot, 'creo_safe_resident_internal_v15.dll');
 const internalResidentLoader = path.join(
-  bridgeRoot, 'creo_internal_resident_loader_v14.exe');
+  bridgeRoot, 'creo_internal_resident_loader_v15.exe');
 let activePersistentBinding = null;
 const creoHoleTableRoot = path.resolve(
   process.env.CREO_HOLE_TABLE_ROOT ||
@@ -1167,6 +1167,27 @@ const toolDefinitions = [
     },
   },
   {
+    name: 'creo_resize_current_sheetmetal_planar_wall',
+    description: 'Safely redefine the existing four-line profile of the current sheet-metal planar wall without deleting either feature. The tool removes only square equal-segment inference, replaces the rectangle geometry, regenerates, verifies the exact 3D envelope and volume, rolls the profile back on verification failure, and saves only after all checks pass.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        expected_model: { type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 31 },
+        profile_name: { type: 'string', minLength: 1, maxLength: 80 },
+        profile_id: { type: 'integer', minimum: 8, maximum: 100000000 },
+        length: { type: 'number', minimum: 0.1, maximum: 100000 },
+        width: { type: 'number', minimum: 0.1, maximum: 100000 },
+      },
+      required: ['expected_model', 'profile_name', 'profile_id', 'length', 'width'],
+      additionalProperties: false,
+    },
+    annotations: {
+      title: 'Resize existing Creo sheet-metal planar wall',
+      readOnlyHint: false, destructiveHint: true,
+      idempotentHint: false, openWorldHint: false,
+    },
+  },
+  {
     name: 'creo_link_project_sheetmetal_wall_to_skeleton',
     description: 'In a verified top-level Creo assembly context with its sheet-metal component active, create two assembly relations that drive the planar-wall sketch length and width from the standard skeleton dimensions. The tool preserves existing assembly relations, rejects conflicting targets, temporarily changes and restores the skeleton dimensions to prove that both the sheet dimensions and solid envelope update associatively, saves all three models only after verification, leaves the sheet-metal part active, and recycles older versions of only those model families.',
     inputSchema: {
@@ -2036,6 +2057,25 @@ const toolDefinitions = [
       destructiveHint: true,
       idempotentHint: false,
       openWorldHint: false,
+    },
+  },
+  {
+    name: 'creo_delete_current_project_feature',
+    description: 'Delete exactly one active leaf feature from the current expected Creo project part. The tool requires exact model name, feature name, feature ID and feature type, rejects default feature IDs and any feature with dependent children, regenerates, saves, and verifies that the feature disappeared. The previous Creo file version is preserved for recovery.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        expected_model: { type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1, maxLength: 31 },
+        feature_name: { type: 'string', minLength: 1, maxLength: 80 },
+        feature_id: { type: 'integer', minimum: 8, maximum: 100000000 },
+        expected_type_code: { type: 'integer', minimum: 1, maximum: 100000 },
+      },
+      required: ['expected_model', 'feature_name', 'feature_id', 'expected_type_code'],
+      additionalProperties: false,
+    },
+    annotations: {
+      title: 'Delete guarded Creo feature', readOnlyHint: false,
+      destructiveHint: true, idempotentHint: false, openWorldHint: false,
     },
   },
   {
@@ -3167,7 +3207,7 @@ function ensurePersistentFlatWallBridge() {
     `${JSON.stringify(launchDiagnostics)}`);
 }
 
-function createInternalCreoBinding(targetSession, version = 'v14') {
+function createInternalCreoBinding(targetSession, version = 'v15') {
   const targetProcessId = Number(targetSession.process_id);
   const protocol = `creo-safe-internal-${version}`;
   return {
@@ -3238,7 +3278,7 @@ function internalCreoIdentity(binding, ping) {
 
 function tryReuseActiveInternalCreoBridge() {
   if (!activePersistentBinding ||
-      !['creo-safe-internal-v14', 'creo-safe-internal-v13', 'creo-safe-internal-v11']
+      !['creo-safe-internal-v15', 'creo-safe-internal-v14', 'creo-safe-internal-v13', 'creo-safe-internal-v11']
         .includes(activePersistentBinding.protocol)) {
     return null;
   }
@@ -3289,7 +3329,7 @@ function tryDiscoverLoadedInternalCreoBridge() {
     processes = processes.filter((item) => Number(item.Id) === explicit);
   }
   for (const processInfo of processes) {
-    for (const version of ['v14', 'v13', 'v11']) {
+    for (const version of ['v15', 'v14', 'v13', 'v11']) {
       const binding = createInternalCreoBinding({
         process_id: Number(processInfo.Id),
         connect_id: '', display: '', user: '',
@@ -3330,8 +3370,8 @@ function ensureInternalCreoBridge() {
   const sessions = discoverCreoSessions();
   const targetSession = selectTargetSession(
     sessions, activePersistentBinding, process.env.CREO_TARGET_PROCESS_ID);
-  let binding = createInternalCreoBinding(targetSession, 'v14');
-  for (const version of ['v14', 'v13', 'v11']) {
+  let binding = createInternalCreoBinding(targetSession, 'v15');
+  for (const version of ['v15', 'v14', 'v13', 'v11']) {
     binding = createInternalCreoBinding(targetSession, version);
     try {
       const ping = requestPersistentFlatWall(binding, 'PING');
@@ -3350,7 +3390,7 @@ function ensureInternalCreoBridge() {
       // This Creo process has not loaded this supported DLL version.
     }
   }
-  binding = createInternalCreoBinding(targetSession, 'v14');
+  binding = createInternalCreoBinding(targetSession, 'v15');
 
   if (process.env.CREO_ALLOW_DYNAMIC_INTERNAL_LOAD !== '1') {
     const error = new Error(
@@ -3592,6 +3632,70 @@ function discoverWallMountContext() {
   const topAssembly = chooseTopAssembly(models);
   const skeleton = chooseSkeleton(models, topAssembly.model_name);
   return { session, workingDirectory, models, topAssembly, skeleton };
+}
+
+function readInitialWallMountContextWithoutDisplay(basicSession) {
+  const workingDirectory = path.resolve(basicSession.working_directory || '');
+  if (!workingDirectory || !fs.existsSync(workingDirectory) ||
+      !fs.statSync(workingDirectory).isDirectory()) {
+    throw new Error('当前 Creo 会话没有有效工作目录。');
+  }
+  currentToolWorkingDirectory = workingDirectory;
+  const models = latestModelFamilies(workingDirectory);
+  const topAssembly = chooseTopAssembly(models);
+  const skeleton = chooseSkeleton(models, topAssembly.model_name);
+  let skeletonReadback = null;
+  if (skeleton) {
+    const skeletonPath = path.join(workingDirectory, skeleton.file_name);
+    skeletonReadback = { model: skeleton };
+    try {
+      const featureResult = runBridge('creo_features_bridge.exe', [skeletonPath]);
+      const keyPattern = /(后框|前框|屏|玻璃|VESA|壁挂|风扇|过滤棉|气弹簧|铰链|圆角)/i;
+      skeletonReadback.feature_count = Array.isArray(featureResult.features)
+        ? featureResult.features.length : 0;
+      skeletonReadback.key_features = Array.isArray(featureResult.features)
+        ? featureResult.features
+          .filter((item) => keyPattern.test(item.name || ''))
+          .map((item) => ({
+            id: item.id, name: item.name, type: item.type, status: item.status,
+          }))
+        : [];
+    } catch (error) {
+      skeletonReadback.features_error = error.detail || { message: error.message };
+    }
+    try {
+      const dimensionResult = runBridge('creo_dimensions_bridge.exe', [skeletonPath]);
+      const keyIds = new Set(
+        (skeletonReadback.key_features || []).map((item) => item.id));
+      skeletonReadback.dimension_count = Array.isArray(dimensionResult.dimensions)
+        ? dimensionResult.dimensions.length : 0;
+      skeletonReadback.key_dimensions = Array.isArray(dimensionResult.dimensions)
+        ? dimensionResult.dimensions
+          .filter((item) => keyIds.has(item.owner_feature_id))
+          .map((item) => ({
+            id: item.id,
+            symbol: item.symbol,
+            value: item.value,
+            relation_driven: item.relation_driven,
+            owner_feature_id: item.owner_feature_id,
+            owner_feature_name: item.owner_feature_name,
+          }))
+        : [];
+    } catch (error) {
+      skeletonReadback.dimensions_error = error.detail || { message: error.message };
+    }
+  }
+  return {
+    working_directory: workingDirectory,
+    top_assembly: topAssembly,
+    skeleton: skeletonReadback,
+    top_assembly_active: basicSession.model_type_code === 2 &&
+      String(basicSession.model_name || '').toLowerCase() ===
+      String(topAssembly.model_name || '').toLowerCase(),
+    current_model_preserved: true,
+    display_changed: false,
+    readonly: true,
+  };
 }
 
 function openTopAssemblyAndReadSkeleton() {
@@ -3980,14 +4084,7 @@ function handleToolCall(name, args) {
     let wallMountContextError = null;
     if (basic.model_open === true) {
       try {
-        const context = openTopAssemblyAndReadSkeleton();
-        wallMountContext = {
-          working_directory: context.working_directory,
-          top_assembly: context.top_assembly,
-          skeleton: context.skeleton,
-          top_assembly_active: context.top_assembly_active,
-          readonly: true,
-        };
+        wallMountContext = readInitialWallMountContextWithoutDisplay(basic);
       } catch (error) {
         wallMountContextError = {
           non_blocking: true,
@@ -4106,6 +4203,32 @@ function handleToolCall(name, args) {
       projectDirectory, result.saved_file, ['.prt']);
     return toolResult(withProjectModelCleanup(
       projectDirectory, result, [savedPath]));
+  }
+
+  if (name === 'creo_resize_current_sheetmetal_planar_wall') {
+    const expectedModel = ensureCreoModelName(args.expected_model, 'expected_model');
+    const profileName = ensureCreoFeatureName(args.profile_name, 'profile_name');
+    const profileId = Number(args.profile_id);
+    if (!Number.isInteger(profileId) || profileId < 8 || profileId > 100000000) {
+      throw new Error('profile_id must be a valid non-default feature ID.');
+    }
+    const length = ensureFiniteNumber(args.length, 'length', 0.1, 100000);
+    const width = ensureFiniteNumber(args.width, 'width', 0.1, 100000);
+    const projectDirectory = resolveCurrentCreoWorkingDirectory();
+    runBridge('creo_project_workdir_bridge.exe', [projectDirectory]);
+    const result = runBridge('creo_sheetmetal_planar_wall_resize_bridge.exe', [
+      expectedModel, profileName, String(profileId), String(length), String(width),
+    ]);
+    const escapedModel = expectedModel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const matcher = new RegExp(`^${escapedModel}\\.prt(?:\\.(\\d+))?$`, 'i');
+    const candidates = fs.readdirSync(projectDirectory)
+      .map((fileName) => ({ fileName, match: fileName.match(matcher) }))
+      .filter((item) => item.match)
+      .sort((a, b) => Number(b.match[1] || 0) - Number(a.match[1] || 0));
+    if (candidates.length === 0) throw new Error('Saved part was not found after resize.');
+    const savedPath = path.join(projectDirectory, candidates[0].fileName);
+    result.saved_file = savedPath;
+    return toolResult(withProjectModelCleanup(projectDirectory, result, [savedPath]));
   }
 
   if (name === 'creo_link_project_sheetmetal_wall_to_skeleton') {
@@ -4978,6 +5101,23 @@ function handleToolCall(name, args) {
       projectDirectory, result, [result.saved_file]));
   }
 
+  if (name === 'creo_delete_current_project_feature') {
+    resolveCurrentCreoWorkingDirectory();
+    const expectedModel = ensureCreoModelName(args.expected_model, 'expected_model');
+    const featureName = ensureCreoFeatureName(args.feature_name, 'feature_name');
+    const featureId = Number(args.feature_id);
+    const expectedType = Number(args.expected_type_code);
+    if (!Number.isInteger(featureId) || featureId < 8 || featureId > 100000000) {
+      throw new Error('feature_id must be an integer from 8 to 100000000.');
+    }
+    if (!Number.isInteger(expectedType) || expectedType < 1 || expectedType > 100000) {
+      throw new Error('expected_type_code must be an integer from 1 to 100000.');
+    }
+    return toolResult(runBridge('creo_feature_delete_bridge.exe', [
+      expectedModel, featureName, String(featureId), String(expectedType),
+    ]));
+  }
+
   if (name === 'creo_rename_current_project_part') {
     const projectDirectory = resolveCurrentCreoWorkingDirectory();
     const expectedName = ensureCreoModelName(args.expected_name, 'expected_name');
@@ -5826,7 +5966,7 @@ function handleRequest(request) {
             ? request.params.protocolVersion
             : '2025-06-18',
           capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: 'creo-safe-bridge', version: '0.14.0' },
+          serverInfo: { name: 'creo-safe-bridge', version: '0.15.0' },
           instructions: 'Creo 必须已在同一 Windows 会话中运行。每次新开 Creo 并选好工作目录后的首次命令，先调用 creo_start_resident_and_get_basic_model，绑定 PID、启动时间和专属管道，读取当前工作目录、当前模型、顶层装配和骨架基本数据；关闭该次 Creo 后桥接自动退出。读取工具不修改模型；写入工具拒绝覆盖或核对预期旧值，并在写入后验证。所有创建、读取、修改、装配、导出和清理工具都必须先读取当前 Creo 会话已经选择的工作目录，并且只能操作该目录的直接子文件；禁止接收 project_name、固定项目根目录或调用方提供的目录路径。以后新增的 Creo 工具也必须遵守相同规则。装配体、骨架、骨架实体、通用草绘及重合/对齐装配工具通过 Pro/TOOLKIT 正式接口执行。任一失败都必须报告真实阶段和错误码，无法验证的项目视为阻塞；顶层重新生成和全部强制检查通过后才能保存。',
         },
       });

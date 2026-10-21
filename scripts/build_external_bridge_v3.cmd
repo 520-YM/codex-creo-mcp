@@ -55,6 +55,7 @@ call :compile creo_mass_properties_bridge
 call :compile creo_multi_write_bridge
 call :compile creo_project_workdir_bridge
 call :compile creo_sheetmetal_plate_bridge
+call :compile creo_sheetmetal_planar_wall_resize_bridge
 call :compile creo_sheetmetal_reverse_wall_direction_bridge
 call :compile creo_sheetmetal_skeleton_link_bridge
 call :compile creo_sheetmetal_three_circle_cut_bridge

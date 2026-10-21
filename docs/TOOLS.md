@@ -1,6 +1,6 @@
 # MCP 工具清单
 
-正式工具数量：**67**。
+正式工具数量：**68**。
 
 所有工具均不得接收 `project_name` 或固定项目目录。涉及模型文件时，目录来源必须是当前 Creo 会话。
 
@@ -271,3 +271,7 @@ Create one independent sketched datum-curve feature in the current expected Creo
 ## 67. `creo_cleanup_project_versions`
 
 After a newly generated part has been verified, move every other .prt or .prt.<version> file in the current Creo working directory to the Windows Recycle Bin. The explicitly named keep file is never removed and unrelated files are untouched.
+
+## 68. `creo_delete_current_project_feature`
+
+删除当前活动项目零件中的一个叶子特征。模型名、特征名、特征 ID 和类型代码必须全部匹配；默认特征 ID、有子特征、非活动特征或装配模型均会被拒绝。删除后重新生成、保存并回读确认特征已消失，同时保留上一版 Creo 文件用于恢复。
