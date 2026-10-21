@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-10-21",
+  "source": "sanitized_long_term_conversation_distillation",
+  "precedence": [
+    "current_explicit_user_instruction",
+    "live_creo_api_readback",
+    "approved_project_rule",
+    "company_standard",
+    "dated_observation"
+  ],
+  "runtime": {
+    "expected_protocol": "creo-safe-internal-v16",
+    "recorded_tool_count": 69,
+    "tool_count_policy": "enumerate_runtime_do_not_assume"
+  },
+  "interaction_policy": {
+    "truthful_results_only": true,
+    "reuse_current_creo_session": true,
+    "avoid_unnecessary_restart": true,
+    "use_internal_dll_only": true,
+    "screenshots_or_ui_automation_require_permission": true,
+    "external_bridge_requires_permission": true,
+    "continue_independent_safe_steps_after_nonfatal_failure": true,
+    "return_regenerate_validate_top_assembly": true
+  },
+  "models": {
+    "top_assembly": "M26Z0100000-V01",
+    "skeleton": "M26Z0100000-V01_SKEL",
+    "rear_cover_assembly": "M26Z0141001-V01",
+    "front_frame_assembly": "M26Z0141002-V01",
+    "screen_module_assembly": "M26Z0163001-V01",
+    "screen_mount_part": "M26Z0181090-V01",
+    "wall_mount_sketch_part": "M26Z0181042-V01",
+    "filter_opening_part": "M26Z0181015-V01"
+  },
+  "verified_targets": {
+    "front_frame_open_angle_deg": {
+      "target": 50,
+      "tolerance": 5
+    },
+    "closed_gas_spring_compression_margin_mm": 10,
+    "screen_to_front_open_angle_difference_max_deg": 3,
+    "wall_mount_sketch_width_mm": 400,
+    "wall_mount_sketch_length_increment_mm": 100,
+    "filter_width_mm": 120,
+    "hinge_spacing_approx_mm": 300,
+    "position_dimensions_default": "integer_unless_product_standard_requires_decimal"
+  },
+  "component_switching": {
+    "screen_planes": [
+      "屏横平面",
+      "屏竖平面",
+      "屏体平面"
+    ],
+    "vesa_order": [
+      "横向",
+      "纵向"
+    ],
+    "glass_changes": [
+      "outer_length",
+      "outer_width",
+      "inner_length",
+      "inner_width",
+      "creo_model_name_and_references"
+    ]
+  },
+  "fan_rules": {
+    "each_size_change_requires": [
+      "intake_count",
+      "exhaust_count",
+      "first_position",
+      "spacing",
+      "center_symmetry",
+      "actual_member_readback",
+      "top_regenerate"
+    ],
+    "explicit_transition_55_to_65": {
+      "exhaust_delta": 1,
+      "intake_delta": 3
+    },
+    "reverse_transition_guard": "apply_negative_delta_only_after_starting_configuration_is_verified",
+    "dated_observation_2026_10_21": {
+      "assembly": "M26Z0181080-V01",
+      "fan_model": "FAN-92X38",
+      "fan_count": 8,
+      "guard_model": "92-FANGHUWANG",
+      "guard_count": 8,
+      "rear_cover_model": "M26Z0141001-V01",
+      "possible_exhaust_component": "M26Z0181079-V01",
+      "possible_exhaust_component_count": 5,
+      "semantic_role_verified": false
+    },
+    "capability_gap": "v16_snapshot_had_no_safe_component_reduction_and_redistribution_writer"
+  },
+  "gas_spring_rules": {
+    "required": [
+      "moving_mass",
+      "center_of_mass_lever",
+      "gas_spring_lever",
+      "model",
+      "force",
+      "rear_bracket_position",
+      "front_or_screen_bracket_position",
+      "closed_margin",
+      "maximum_open_angle",
+      "holding_torque",
+      "motion_direction",
+      "top_regenerate"
+    ],
+    "rear_bracket_first": true,
+    "front_bracket_small_adjustment_allowed": true,
+    "bracket_structure_extrusion_change_forbidden": true,
+    "force_only_is_not_sufficient": true
+  },
+  "failure_policy": {
+    "traceback": "stop_writes_and_verify_saved_state",
+    "mechanism_disconnect": "constraints_or_geometry_unsatisfied_not_success",
+    "stale_runtime": "compare_mcp_declarations_with_handshake_protocol",
+    "timeout": "read_only_targeted_diagnosis_no_blind_retries",
+    "unknown_or_unverified": "blocking_not_success"
+  },
+  "capability_priorities": [
+    "fan_count_position_spacing_symmetry_writer",
+    "safe_component_instance_suppress_resume_delete",
+    "gas_spring_kinematics_and_torque_closed_loop",
+    "moving_component_mass_and_center_of_mass_whitelist",
+    "atomic_mechanism_rollback",
+    "glass_rename_and_reference_update",
+    "version_resilient_hinge_pattern_writer"
+  ]
+}
