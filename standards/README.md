@@ -28,6 +28,7 @@
 - [Creo 常用操作流程](rules/12_Creo常用操作流程.md)
 - [质量读取与力学计算范围](rules/13_质量读取与力学计算范围.md)
 - [对话提炼与执行记忆](rules/14_对话提炼与执行记忆.md)
+- [两组气弹簧适配完整流程](rules/15_两组气弹簧适配完整流程.md)
 - [资料来源清单](sources.md)
 
 ## 结构化数据
@@ -39,6 +40,7 @@
 - `data/automation_policy.json`
 - `data/workflow_rules.json`
 - `data/conversation_knowledge.json`
+- `data/dual_gas_spring_adaptation.json`
 
 ## 更新流程
 
