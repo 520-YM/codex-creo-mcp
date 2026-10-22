@@ -42,16 +42,24 @@
     ]
   },
   "gas_spring_required_checks": [
-    "model",
-    "moving_mass",
-    "center_of_mass_lever",
-    "gas_spring_lever",
-    "rear_bracket_position",
-    "front_or_screen_bracket_position",
-    "closed_compression_margin",
+    "current_model_and_quantity",
+    "moving_mass_complete",
+    "center_of_gravity",
+    "hinge_axis",
+    "fixed_and_moving_mount_centers",
+    "extended_length_and_stroke",
+    "closed_distance_and_reserve",
+    "open_distance_and_reserve",
     "maximum_open_angle",
-    "holding_torque",
-    "top_regenerate"
+    "gravity_torque",
+    "two_spring_torque",
+    "holding_safety_factor",
+    "closed_does_not_self_open",
+    "maximum_open_does_not_fall",
+    "motion_direction",
+    "constraints_and_interference",
+    "front_screen_angle_difference_when_applicable",
+    "top_regenerate_save_readback"
   ],
   "mechanical_targets": {
     "front_frame_open_angle_deg": 50,
@@ -61,7 +69,15 @@
     "hinge_spacing_target_mm": 300,
     "wall_mount_sketch_width_mm": 400,
     "wall_mount_sketch_length_increment_mm": 100,
-    "filter_width_mm": 120
+    "filter_width_mm": 120,
+    "gas_spring_open_holding_safety_factor": [
+      1.1,
+      1.2
+    ],
+    "gas_spring_states": [
+      "fully_closed",
+      "maximum_open"
+    ]
   },
   "mass_scopes": [
     "complete_machine",
@@ -108,6 +124,8 @@
     "standards/README.md",
     "standards/data/workflow_rules.json",
     "standards/data/automation_policy.json",
-    "standards/data/conversation_knowledge.json"
-  ]
+    "standards/data/conversation_knowledge.json",
+    "standards/data/dual_gas_spring_adaptation.json"
+  ],
+  "gas_spring_workflow_reference": "standards/data/dual_gas_spring_adaptation.json"
 }
