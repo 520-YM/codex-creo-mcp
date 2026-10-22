@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-10-21",
+  "updated_at": "2026-10-22",
   "source": "sanitized_long_term_conversation_distillation",
   "precedence": [
     "current_explicit_user_instruction",
@@ -111,7 +111,42 @@
     "rear_bracket_first": true,
     "front_bracket_small_adjustment_allowed": true,
     "bracket_structure_extrusion_change_forbidden": true,
-    "force_only_is_not_sufficient": true
+    "force_only_is_not_sufficient": true,
+    "full_reference": "standards/data/dual_gas_spring_adaptation.json",
+    "two_groups": {
+      "front_frame": {
+        "moving_model": "M26Z0141002-V01",
+        "quantity": 2,
+        "adjustment_order": [
+          "rear_bracket",
+          "small_front_bracket_adjustment",
+          "change_model"
+        ]
+      },
+      "screen_module": {
+        "moving_model": "M26Z0163001-V01",
+        "quantity": 2,
+        "adjustment_order": [
+          "skeleton_screen_bracket",
+          "M26Z0181090-V01_screen_bracket_hole",
+          "change_model"
+        ],
+        "front_angle_difference_max_deg": 3
+      }
+    },
+    "current_55_observation_2026_10_22": {
+      "front_mass_kg": 32.986068612065196,
+      "center_of_gravity_mm": [
+        -0.42002593415468414,
+        -39.86394354170882,
+        1161.2950674855147
+      ],
+      "material_issue_resolved": "ZHUANJIEBAN.prt.4",
+      "failed_mass_components": 0,
+      "front_model_observed": "YQL600-255-22-10-210N",
+      "screen_model_observed": "YQL300-110-18-8-220N",
+      "mechanical_validation_complete": false
+    }
   },
   "failure_policy": {
     "traceback": "stop_writes_and_verify_saved_state",
