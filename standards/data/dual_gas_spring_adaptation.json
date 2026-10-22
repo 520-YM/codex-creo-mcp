@@ -1,0 +1,236 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-10-22",
+  "source": "sanitized_conversation_learning_and_verified_creo_readback",
+  "precedence": [
+    "current_explicit_user_instruction",
+    "live_creo_api_readback",
+    "approved_project_rule",
+    "company_standard",
+    "dated_observation"
+  ],
+  "units": {
+    "length_model": "mm",
+    "length_mechanics": "m",
+    "mass": "kg",
+    "force": "N",
+    "torque": "N*m",
+    "angle": "deg",
+    "gravity": 9.8
+  },
+  "groups": {
+    "front_frame": {
+      "moving_model": "M26Z0141002-V01",
+      "quantity": 2,
+      "fixed_bracket": {
+        "model": "M26Z0100000-V01_SKEL",
+        "feature": "后盖气弹簧支架",
+        "adjustment_priority": 1
+      },
+      "moving_bracket": {
+        "model": "M26Z0100000-V01_SKEL",
+        "feature": "前框气弹簧支架",
+        "adjustment_priority": 2,
+        "small_adjustment_only": true
+      },
+      "bracket_structure_extrusion_change_forbidden": true,
+      "max_open_angle": {
+        "target": 50,
+        "tolerance": 5
+      },
+      "closed_compression_reserve_target_mm": 10,
+      "rear_bracket_initial_ratio": 0.75,
+      "integer_position_dimensions": true
+    },
+    "screen_module": {
+      "moving_model": "M26Z0163001-V01",
+      "quantity": 2,
+      "fixed_or_primary_bracket": {
+        "model": "M26Z0100000-V01_SKEL",
+        "feature": "屏组件气弹簧支架",
+        "adjustment_priority": 1
+      },
+      "secondary_hole_position": {
+        "model": "M26Z0181090-V01",
+        "feature": "屏组件气弹簧支架孔位",
+        "adjustment_priority": 2
+      },
+      "front_angle_difference_max": 3,
+      "closed_compression_reserve_target_mm": 10
+    }
+  },
+  "required_inputs": [
+    "session_identity",
+    "working_directory",
+    "top_assembly",
+    "skeleton",
+    "moving_mass",
+    "mass_source",
+    "center_of_gravity",
+    "hinge_axis",
+    "fixed_mount_center",
+    "moving_mount_center",
+    "current_gas_spring_model",
+    "extended_length",
+    "stroke",
+    "force",
+    "closed_state_geometry",
+    "maximum_open_state_geometry",
+    "bracket_dimensions_and_directions",
+    "mechanism_constraint_state"
+  ],
+  "formulas": {
+    "minimum_length_mm": "L_min = L_ext - stroke",
+    "closed_reserve_mm": "R_close = L_close - L_min",
+    "open_reserve_mm": "R_open = L_ext - L_open",
+    "used_stroke_mm": "S_used = L_open - L_close",
+    "gravity_force_N": "W = mass_kg * 9.8",
+    "gravity_torque": "project(cross(center_of_gravity_from_hinge_axis, gravity_force), hinge_axis)",
+    "spring_torque_each": "project(cross(moving_mount_from_hinge_axis, spring_force_along_mount_line), hinge_axis)",
+    "spring_torque_total": "sum(two_springs)",
+    "open_holding_safety_factor_target": [
+      1.1,
+      1.2
+    ]
+  },
+  "hard_checks": {
+    "states": [
+      "fully_closed",
+      "maximum_open"
+    ],
+    "front_open_angle_range": [
+      45,
+      55
+    ],
+    "closed_reserve_approx_mm": 10,
+    "open_reserve_min_mm": 0,
+    "used_stroke_not_greater_than_rated": true,
+    "closed_must_not_self_open": true,
+    "maximum_open_must_not_fall": true,
+    "screen_to_front_angle_difference_max_deg": 3,
+    "direction_must_be_correct": true,
+    "no_interference": true,
+    "mechanism_connected": true,
+    "top_regenerate_and_readback": true
+  },
+  "selection_order": [
+    "fit_extended_length_and_stroke_to_two_states",
+    "verify_closed_and_open_reserves",
+    "calculate_required_force_from_torque",
+    "select_existing_model_from_approved_library",
+    "optimize_bracket_lever_arm_if_needed",
+    "repeat_all_checks_after_any_model_or_position_change"
+  ],
+  "variant_update_required": [
+    "YQL_assembly_name",
+    "YQLUP_part_name",
+    "YQLDOWN_part_name",
+    "UP_stroke_feature",
+    "DOWN_stroke_feature",
+    "UP_compensation_distance",
+    "slider_translation_maximum",
+    "mount_center_distance",
+    "interface_diameters",
+    "constraint_and_motion_direction",
+    "regenerate_save_readback"
+  ],
+  "prohibited_shortcuts": [
+    "compare_total_force_with_weight_only",
+    "change_bracket_structure_extrusion_length",
+    "declare_success_from_model_name_only",
+    "force_mechanism_beyond_extended_or_compressed_length",
+    "ignore_failed_mass_components",
+    "report_command_sent_as_success",
+    "blind_retry_after_traceback_or_mechanism_disconnect"
+  ],
+  "learned_failures": [
+    {
+      "observation": "open_angle_59.36_deg",
+      "lesson": "installation fit does not prove target angle"
+    },
+    {
+      "observation": "open_angle_37.22_deg_after_75_percent_position",
+      "lesson": "75 percent is initial search reference only"
+    },
+    {
+      "observation": "closed_reserve_68_or_27.2_mm_then_wrong_move_to_44.17_mm",
+      "lesson": "read back reserve change direction after each move"
+    },
+    {
+      "observation": "front_frame_motion_reversed",
+      "lesson": "verify motion direction after constraint or bracket-line changes"
+    },
+    {
+      "observation": "mechanism_disconnected",
+      "lesson": "continue button does not mean repaired"
+    },
+    {
+      "observation": "550_230_600_255_650_280_765_300_and_total_500_discussed",
+      "lesson": "candidates are not final standards without full revalidation"
+    }
+  ],
+  "failure_stop_conditions": [
+    "traceback",
+    "mechanism_disconnect",
+    "motion_direction_reversed",
+    "regeneration_failure",
+    "session_or_workdir_changed",
+    "expected_old_value_mismatch",
+    "incomplete_mass",
+    "angle_reserve_or_torque_not_readable"
+  ],
+  "completion_report_fields": [
+    "moving_model_and_mass_source",
+    "mass_center_of_gravity_hinge_axis",
+    "model_quantity_extended_length_stroke_force",
+    "fixed_and_moving_bracket_positions",
+    "closed_distance_minimum_length_reserve",
+    "open_distance_extended_length_reserve",
+    "actual_open_angle",
+    "gravity_and_spring_torque_safety_factor",
+    "closed_hold_result",
+    "open_hold_result",
+    "direction_constraints_interference",
+    "top_regenerate_save_readback",
+    "timings_unfinished_risks"
+  ],
+  "dated_observations": {
+    "current_55_2026_10_22": {
+      "front_model_file": "M26Z0141002-V01.asm.63",
+      "front_mass_kg": 32.986068612065196,
+      "front_center_of_gravity_mm": [
+        -0.42002593415468414,
+        -39.86394354170882,
+        1161.2950674855147
+      ],
+      "leaf_instances": 146,
+      "failed_mass_components": 0,
+      "skipped_non_solid": [
+        "M26Z0100000-V01_SKEL"
+      ],
+      "material_fix": "ZHUANJIEBAN.prt.4",
+      "front_gas_spring_observed": {
+        "model": "YQL600-255-22-10-210N",
+        "quantity": 2
+      },
+      "screen_gas_spring_observed": {
+        "model": "YQL300-110-18-8-220N",
+        "quantity": 2,
+        "semantic_path_reverification_required": true
+      },
+      "validation_status": "not_final_closed_reserve_angle_torque_and_direction_incomplete"
+    },
+    "historical_65_trial": {
+      "front_mass_kg": 31.54,
+      "gas_spring": {
+        "model": "YQL600-255-22-10-210N",
+        "quantity": 2
+      },
+      "front_bracket_mm": 375,
+      "rear_bracket_mm": 800,
+      "measured_open_angle_deg": 46.25,
+      "closed_reserve_verified": false,
+      "status": "trial_not_final"
+    }
+  }
+}
