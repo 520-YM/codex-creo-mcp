@@ -1,11 +1,26 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "target_open_angle_deg": 50,
   "open_angle_tolerance_deg": 5,
   "target_closed_reserve_mm": 10,
   "rear_bracket_initial_ratio": 0.75,
   "bracket_dimensions_must_be_integer_mm": true,
-  "required_checks": ["型号", "前框支架位置", "后盖支架位置", "关闭压缩余量", "最大开门角度", "是否能撑起", "顶层重新生成"],
+  "required_checks": [
+    "型号与内部变型",
+    "活动件完整质量",
+    "重心与铰链轴",
+    "气弹簧有效力臂",
+    "前框或屏组件支架位置",
+    "后盖或固定端支架位置",
+    "关闭压缩余量",
+    "开启伸长余量",
+    "最大开门角度",
+    "关闭不自开",
+    "开启不下落",
+    "运动方向",
+    "机构连接与干涉",
+    "顶层重新生成与读回"
+  ],
   "screen_to_front_angle_difference_max_deg": 3,
   "model_naming": "YQL{中心距}-{行程}-{UP径}-{DOWN径}-{推力N}",
   "latest_65_trial": {
@@ -16,11 +31,56 @@
     "rear_bracket_mm": 800,
     "measured_open_angle_deg": 46.25,
     "current_mass_readback": {
-      "status": "incomplete",
-      "failed_components": ["ZHUANJIEBAN", "ZHUANJIEBAN"],
-      "note": "不得用不完整质量覆盖此前已验证的31.54kg"
+      "status": "historical_superseded_by_2026_10_22_current_55_readback",
+      "note": "31.54kg remains a historical 65-inch trial value, not current 55-inch live mass"
     },
     "closed_reserve_verified": false,
     "status": "trial_not_final"
+  },
+  "updated_at": "2026-10-22",
+  "full_workflow_reference": "standards/data/dual_gas_spring_adaptation.json",
+  "two_groups": {
+    "front_frame": {
+      "moving_model": "M26Z0141002-V01",
+      "quantity": 2,
+      "adjustment_order": [
+        "后盖气弹簧支架",
+        "前框气弹簧支架小范围调整",
+        "更换气弹簧型号"
+      ],
+      "structure_extrusion_change_forbidden": true
+    },
+    "screen_module": {
+      "moving_model": "M26Z0163001-V01",
+      "quantity": 2,
+      "adjustment_order": [
+        "骨架屏组件气弹簧支架",
+        "M26Z0181090-V01屏组件气弹簧支架孔位",
+        "更换气弹簧型号"
+      ],
+      "front_angle_difference_max_deg": 3
+    }
+  },
+  "current_55_readback": {
+    "date": "2026-10-22",
+    "front_model_file": "M26Z0141002-V01.asm.63",
+    "front_mass_kg": 32.986068612065196,
+    "center_of_gravity_mm": [
+      -0.42002593415468414,
+      -39.86394354170882,
+      1161.2950674855147
+    ],
+    "failed_mass_components": 0,
+    "material_fix": "ZHUANJIEBAN.prt.4",
+    "observed_front_gas_spring": {
+      "model": "YQL600-255-22-10-210N",
+      "quantity": 2
+    },
+    "observed_screen_gas_spring": {
+      "model": "YQL300-110-18-8-220N",
+      "quantity": 2,
+      "semantic_path_reverification_required": true
+    },
+    "status": "mass_complete_mechanical_validation_incomplete"
   }
 }
