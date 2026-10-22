@@ -21,7 +21,7 @@
 
 1. 安装与源码兼容的 Creo 及合法 Pro/TOOLKIT SDK。
 2. 安装 Visual Studio C++ Build Tools、Node.js 20+、Git 和 Codex Desktop。
-3. 克隆仓库；Codex 首先读取根目录 `AGENTS.md`，再加载 `standards/README.md` 与 `standards/data/conversation_knowledge.json`。
+3. 克隆仓库；Codex 首先读取根目录 `AGENTS.md`，再加载 `standards/README.md`、`standards/data/conversation_knowledge.json` 与 `standards/data/dual_gas_spring_adaptation.json`。
 4. 设置目标电脑自己的 `CREO_COMMON_FILES` 和 `VSDEVCMD`。
 5. 运行 `build_all.cmd`，生成 `dist/bin` 中的 v16 DLL、加载器和命令程序。
 6. 运行 `install.ps1`。
