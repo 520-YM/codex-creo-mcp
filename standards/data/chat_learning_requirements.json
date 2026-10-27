@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-10-27",
+  "scope": "landscape_indoor_glass_outdoor_wall_mount",
+  "source": "user_provided_conversation_requirements_not_live_model_state",
+  "reference": "standards/rules/16_聊天记录学习与14步严格落实.md",
+  "runtime_implemented": false,
+  "step_8_failure": "record_and_continue_safe_independent_steps",
+  "must_not_silently_skip": [10, 11, 12],
+  "step_5_rename_required": true,
+  "step_14": {"save_even_if_validation_incomplete_when_safe": true, "save_is_not_acceptance": true, "no_retry_writes_to_crashed_session": true},
+  "cleanup_requires_separate_authorization": true,
+  "preserve_failure_diagnostics": true,
+  "gas_execution_order": ["read_scoped_mass_and_cog", "select_catalog_model", "apply_and_verify_variant", "adjust_skeleton_mount_position", "verify_closed_and_maximum_open_geometry", "verify_torque_direction_constraints", "iterate_when_needed"],
+  "missing_material": {"exclude_per_user_authorization": true, "list_exclusions": true, "label_mass_incomplete": true, "cog_same_scope": true, "not_full_physical_safety_acceptance": true},
+  "semantic_mappings_require_live_verification": true,
+  "outlet": {"part": "M26Z0181020-V01", "features": ["阵列3", "拉伸8"]},
+  "intake": {"part": "M26Z0181080-V01", "features": ["阵列2"]},
+  "hinge": {"model_role": "skeleton", "feature": "铰链阵列"},
+  "installation_positions": "prefer_integer_but_preserve_calculation_precision_and_revalidate",
+  "completion_evidence": ["old_value", "target_value", "readback", "regeneration", "validation_status", "save_status", "elapsed_time", "remaining_work"]
+}

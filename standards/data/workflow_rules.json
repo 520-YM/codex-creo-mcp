@@ -85,7 +85,9 @@
     "screen_module_moving_system"
   ],
   "write_gate": {
-    "save_only_after_all_required_checks_pass": true,
+    "save_only_after_all_required_checks_pass": false,
+    "save_incomplete_validation_when_session_healthy_and_safe": true,
+    "save_is_not_acceptance": true,
     "unknown_or_unverified_is_blocking": true,
     "truthful_result_required": true
   },
@@ -127,5 +129,6 @@
     "standards/data/conversation_knowledge.json",
     "standards/data/dual_gas_spring_adaptation.json"
   ],
-  "gas_spring_workflow_reference": "standards/data/dual_gas_spring_adaptation.json"
+  "gas_spring_workflow_reference": "standards/data/dual_gas_spring_adaptation.json",
+  "latest_user_requirements_reference": "standards/data/chat_learning_requirements.json"
 }
