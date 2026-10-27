@@ -139,7 +139,7 @@
     "change_bracket_structure_extrusion_length",
     "declare_success_from_model_name_only",
     "force_mechanism_beyond_extended_or_compressed_length",
-    "ignore_failed_mass_components",
+    "silently_ignore_failed_mass_components_without_authorized_exclusion_list",
     "report_command_sent_as_success",
     "blind_retry_after_traceback_or_mechanism_disconnect"
   ],
@@ -176,7 +176,7 @@
     "regeneration_failure",
     "session_or_workdir_changed",
     "expected_old_value_mismatch",
-    "incomplete_mass",
+    "incomplete_mass_without_authorized_scoped_exclusions",
     "angle_reserve_or_torque_not_readable"
   ],
   "completion_report_fields": [
@@ -194,6 +194,7 @@
     "top_regenerate_save_readback",
     "timings_unfinished_risks"
   ],
+  "execution_order_override_reference": "standards/data/chat_learning_requirements.json",
   "dated_observations": {
     "current_55_2026_10_22": {
       "front_model_file": "M26Z0141002-V01.asm.63",

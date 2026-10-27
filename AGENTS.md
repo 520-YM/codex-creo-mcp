@@ -6,7 +6,7 @@
 
 1. 完整阅读 `README.md`、`standards/README.md`。
 2. 读取 `standards/data/workflow_rules.json`、`standards/data/automation_policy.json`、`standards/data/conversation_knowledge.json` 和 `standards/data/dual_gas_spring_adaptation.json`。
-3. 按任务读取 `standards/rules/` 中相关规则；壁挂尺寸切换必须阅读 01、02、03、04、05、06、07、11、12、13、14、15。
+3. 按任务读取 `standards/rules/` 中相关规则；壁挂尺寸切换必须阅读 01、02、03、04、05、06、07、11、12、13、14、15、16，以及 `standards/data/chat_learning_requirements.json`。规则16明确修订的保存、授权排除缺材料项、先换型后调支架顺序优先于旧对话摘要；不代表运行代码已经支持。
 4. 新 Creo 进程的第一条命令必须调用只读会话握手，核对 PID、启动时间、内部管道、当前工作目录、当前模型、顶层装配和骨架。
 5. 现场 Creo API 读回结果优先于历史快照；规则库中的“观察记录”不能替代实时验证。
 

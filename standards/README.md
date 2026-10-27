@@ -29,6 +29,7 @@
 - [质量读取与力学计算范围](rules/13_质量读取与力学计算范围.md)
 - [对话提炼与执行记忆](rules/14_对话提炼与执行记忆.md)
 - [两组气弹簧适配完整流程](rules/15_两组气弹簧适配完整流程.md)
+- [聊天记录学习与14步严格落实](rules/16_聊天记录学习与14步严格落实.md)
 - [资料来源清单](sources.md)
 
 ## 结构化数据
@@ -41,6 +42,7 @@
 - `data/workflow_rules.json`
 - `data/conversation_knowledge.json`
 - `data/dual_gas_spring_adaptation.json`
+- `data/chat_learning_requirements.json`：2026-10-27用户明确修订；保存、缺材料排除和执行顺序以此及规则16为准，不代表程序已实现。
 
 ## 更新流程
 
